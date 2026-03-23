@@ -15,6 +15,9 @@ Agentic Framework for Synthesizing CodeQL Queries
 - [Citation](#citation)
 
 ## Overview
+
+![QLCoder Iterative Refinement](img/iterative-refinement-figure.png)
+
 QLCoder is a framework for using LLMs to synthesize end-to-end CodeQL queries for vulnerability detection. Given an existing CVE's metadata, LLM, and coding agent, QLCoder iteratively synthesizes a CodeQL query to detect the existing CVE. The starting query is a CodeQL path query template populated by an extracted AST of the diff. While synthesizing the query, the coding agent has access to tools to interface with a RAG database and the CodeQL language server. Afterwards, the query can be used for multivariant analysis, regression testing, or guidance for writing CodeQL queries. 
 
 ## Installation
