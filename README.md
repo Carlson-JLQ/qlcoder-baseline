@@ -323,7 +323,7 @@ The following versions were used to produce the results in the QLCoder paper.
 
 ## Contributions
 We welcome any contributions, pull requests, or issues!
-If you would like to contribute, please either file a new pull request or issue.
+If you would like to contribute, please either file a new pull request or issue. Feel free to take on an existing issue too.
 
 ## Citation
 Consider citing our ICLR'26 paper:
