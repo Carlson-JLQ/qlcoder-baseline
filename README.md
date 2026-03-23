@@ -80,15 +80,15 @@ docker compose up -d
 The CVE must be listed in `data/project_info.csv`. This clones the repository at the buggy commit and generates the fix diff.
 
 ```sh
-python3 scripts/get_cve_repos.py --cve CVE-2025-27818
+docker compose run --rm app python3 scripts/get_cve_repos.py --cve CVE-2025-27818
 # or multiple at once:
-python3 scripts/get_cve_repos.py --cves CVE-2025-27818,CVE-2025-0851
+docker compose run --rm app python3 scripts/get_cve_repos.py --cves CVE-2025-27818,CVE-2025-0851
 # process CVEs from a file (one CVE ID per line)
-python3 scripts/get_cve_repos.py --cve-file cves.txt
+docker compose run --rm app python3 scripts/get_cve_repos.py --cve-file cves.txt
 # process all CVEs
-python3 scripts/get_cve_repos.py --all
+docker compose run --rm app python3 scripts/get_cve_repos.py --all
 # force regenerate existing diffs
-python3 scripts/get_cve_repos.py --cve CVE-2018-9159 --force
+docker compose run --rm app python3 scripts/get_cve_repos.py --cve CVE-2018-9159 --force
 ```
 
 #### Step 5: Create CodeQL databases
@@ -97,14 +97,14 @@ Databases are created with `--build-mode=none` — no build toolchain required.
 
 ```sh
 # to build a specific CVE's CodeQL databases
-python3 scripts/build_codeql_dbs.py --cve-id CVE-2025-27818
+docker compose run --rm app python3 scripts/build_codeql_dbs.py --cve-id CVE-2025-27818
 ```
 
 This creates `cves/CVE-2025-27818/CVE-2025-27818-vul` and `cves/CVE-2025-27818/CVE-2025-27818-fix`.
 
 ```sh
 # to build all of the fetched CVE repos' CodeQL databases
-python3 scripts/build_codeql_dbs.py 
+docker compose run --rm app python3 scripts/build_codeql_dbs.py
 ```
 
 #### Step 6: Populate RAG database
