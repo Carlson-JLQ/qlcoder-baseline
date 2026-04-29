@@ -39,7 +39,7 @@ CHROMA_PORT = int(os.environ.get("CHROMA_PORT", "8000"))
 CHROMA_AUTH_TOKEN = os.environ.get("CHROMA_AUTH_TOKEN", "test")
 CHROMA_DB_PATH = os.environ.get(
     "CHROMA_DB_PATH",
-    os.path.join(QL_CODER_ROOT_DIR, "data", "chroma_db")
+    os.path.join(QL_CODER_ROOT_DIR, "chroma_db")
 )
 
 def get_chroma_client() -> chromadb.ClientAPI:

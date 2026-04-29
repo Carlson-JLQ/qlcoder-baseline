@@ -209,3 +209,6 @@ __marimo__/
 # QLCoder output (keep directory, ignore contents)
 output/*
 !output/.gitkeep
+chroma_db/*
+cves/*
+codeql-lsp-mcp/
