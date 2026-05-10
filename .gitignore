@@ -214,3 +214,4 @@ cves/
 data/chroma_db/
 logs/
 RuleRefiner
+src/output/
