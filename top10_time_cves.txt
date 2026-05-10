@@ -1,0 +1,29 @@
+CVE Top 10 By Table 7 Runtime
+Source: reference/QLCoder_A_Query_Synthesi.txt, Table 7
+Count: 10
+
+Rank | CVE ID         | CWE      | Project   | Time (s) | Tokens (K) | USD
+1    | CVE-2025-27531 | CWE-502  | inlong    | 7894     | 6402.01    | 4.13
+2    | CVE-2025-27522 | CWE-502  | inlong    | 7805     | 5149.58    | 3.58
+3    | CVE-2023-34468 | CWE-094  | nifi      | 7622     | 8168.47    | 4.70
+4    | CVE-2025-48795 | CWE-400  | cxf       | 7568     | 5211.09    | 3.48
+5    | CVE-2022-1274  | CWE-079  | keycloak  | 7472     | 4463.84    | 3.20
+6    | CVE-2025-30067 | CWE-094  | kylin     | 7213     | 5382.61    | 3.72
+7    | CVE-2021-30181 | CWE-094  | dubbo     | 6880     | 8732.56    | 5.76
+8    | CVE-2025-3910  | CWE-287  | keycloak  | 6701     | 5630.84    | 3.50
+9    | CVE-2022-32287 | CWE-022  | uima-uimaj| 6658     | 5932.88    | 4.23
+10   | CVE-2025-7365  | CWE-346  | keycloak  | 6454     | 5955.44    | 3.81
+
+CVE IDs Only
+CVE-2025-27531
+CVE-2025-27522
+CVE-2023-34468
+CVE-2025-48795
+CVE-2022-1274
+CVE-2025-30067
+CVE-2021-30181
+CVE-2025-3910
+CVE-2022-32287
+CVE-2025-7365
+你在虚拟环境qlcoder里面运行整个流程，使用coco agent，迭代次数最大为10次，输入             │
+│   CVE-2025-49656,持续监测整个运行流程，关注运行过程中的内存占用，

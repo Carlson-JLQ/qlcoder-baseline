@@ -5,7 +5,6 @@ import re
 import shutil
 import signal
 import time
-import tomllib
 from typing import Dict, List, Optional
 
 from . import AgentBackend
@@ -19,11 +18,14 @@ _NO_LSP_MODES = ("no_tools",)
 
 MODELS = {
     "gpt-5": "gpt-5",
+    "gpt-5.5-2026-04-24": "gpt-5.5-2026-04-24"
 }
 
-
+# 输入是一组字节块，输出是一组JSONL记录的字节块
 def _jsonl_iter_bytes(byte_chunks: List[bytes]):
+    # 把一串分块到达的二进制输出 byte_chunks ，重新拼成“按换行分隔的一条条 JSONL 记录”
     """Buffer partial lines and yield complete JSONL lines."""
+    # 建一个可变缓冲区，用来累计还没拼完整的数据
     buf = bytearray()
     for chunk in byte_chunks:
         if not chunk:
@@ -41,15 +43,21 @@ def _jsonl_iter_bytes(byte_chunks: List[bytes]):
 
 
 def _parse_json_maybe(line) -> Optional[dict]:
+    # 先把 bytes 类输入解码成字符串，保证后续统一按 str 处理。
     if isinstance(line, (bytes, bytearray)):
+        # 遇到非法 UTF-8 字节时用占位符替换，避免整个流解析直接失败。
         s = line.decode("utf-8", errors="replace").strip()
     else:
+        # 非 bytes 输入也统一转成字符串，并去掉首尾空白字符。
         s = str(line).strip()
+    # 空行或纯空白行视为无有效内容，直接返回 None。
     if not s:
         return None
     try:
+        # 尝试把这一行当作 JSON 记录解析成 Python 对象。
         return json.loads(s)
     except json.JSONDecodeError:
+        # 如果不是合法 JSON，就保留原始文本，交给调用方决定是否忽略。
         return {"_raw": s}
 
 
@@ -340,36 +348,42 @@ class CodexBackend(AgentBackend):
     # Workspace helpers
 
     def _write_codex_config(self, include_chroma: bool, include_codeql: bool):
-        """Write ~/.codex/config.toml with the appropriate MCP servers."""
+        """Update ~/.codex/config.toml while preserving user-managed settings."""
         home = os.environ.get("HOME", os.path.expanduser("~"))
         codex_dir = os.path.join(home, ".codex")
         os.makedirs(codex_dir, exist_ok=True)
         config_path = os.path.join(codex_dir, "config.toml")
 
-        # Preserve existing trust entries if the file already exists
-        existing_projects_line = ""
+        existing_content = ""
         if os.path.exists(config_path):
             try:
-                with open(config_path, "rb") as f:
-                    existing = tomllib.load(f)
-                projects = existing.get("projects", {})
-                if projects:
-                    items = ", ".join(
-                        f'"{k}" = {{ trust_level = "{v.get("trust_level", "trusted")}" }}'
-                        for k, v in projects.items()
-                    )
-                    existing_projects_line = f"projects = {{ {items} }}\n"
+                with open(config_path, "r", encoding="utf-8") as f:
+                    existing_content = f.read()
             except Exception as e:
                 self.logger.warning(f"Could not read existing config.toml: {e}")
 
         model_reasoning_effort = self.model_reasoning_effort or "medium"
+        model_line = f'model_reasoning_effort = "{model_reasoning_effort}"'
+
+        def _remove_table(raw: str, table_name: str) -> str:
+            pattern = rf'(?ms)^\[{re.escape(table_name)}\]\n(?:.*\n)*?(?=^\[|\Z)'
+            return re.sub(pattern, "", raw)
+
+        content = existing_content
+        content = _remove_table(content, "mcp_servers.chroma")
+        content = _remove_table(content, "mcp_servers.codeql")
+
+        if re.search(r"(?m)^model_reasoning_effort\s*=", content):
+            content = re.sub(
+                r"(?m)^model_reasoning_effort\s*=.*$",
+                model_line,
+                content,
+                count=1,
+            )
+        else:
+            content = f"{model_line}\n\n{content.lstrip()}" if content.strip() else f"{model_line}\n"
 
         lines = []
-        if existing_projects_line:
-            lines.append(existing_projects_line)
-
-        lines.append(f'model_reasoning_effort = "{model_reasoning_effort}"')
-
         if include_chroma:
             lines.append("[mcp_servers.chroma]")
             lines.append('command = "uvx"')
@@ -389,8 +403,19 @@ class CodexBackend(AgentBackend):
             lines.append('command = "node"')
             lines.append(f'args = ["{CODEQL_LSP_MCP_PATH}/dist/index.js"]')
 
-        content = "\n".join(lines) + "\n" if lines else ""
-        with open(config_path, "w") as f:
+        content = content.rstrip()
+        managed_content = "\n".join(lines).strip()
+        if managed_content:
+            if content:
+                content = f"{content}\n\n{managed_content}\n"
+            else:
+                content = f"{managed_content}\n"
+        else:
+            content = f"{content}\n" if content else ""
+
+        content = re.sub(r"\n{3,}", "\n\n", content)
+
+        with open(config_path, "w", encoding="utf-8") as f:
             f.write(content)
         self.logger.info(
             f"Wrote Codex config to {config_path} "

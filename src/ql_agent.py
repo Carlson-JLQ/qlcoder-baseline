@@ -10,6 +10,7 @@ import re
 import logging
 import time
 import shutil
+import hashlib
 from typing import Dict, List, Optional, Union, Any
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,193 @@ class QLAgentIterative:
         self.logger = logging.getLogger(__name__)
         self.backend = create_backend(agent_type, model, self.logger, ablation_mode=ablation_mode)
         self.iteration_results = []
+        # User-requested: persist per-iteration runtime situation to a Markdown file.
+        self.run_report_path = None
+        self._monitor_task: Optional[asyncio.Task] = None
+        self._monitor_stop: bool = False
+
+    def _init_run_report(self, task: VulnAnalysisTask, output_dir: str, use_cache: bool, collection_name: Optional[str]) -> None:
+        self.run_report_path = os.path.join(output_dir, "run_report.md")
+        try:
+            with open(self.run_report_path, "w", encoding="utf-8") as f:
+                f.write("# QLCoder Run Report\n\n")
+                f.write(f"- Started: {datetime.now().isoformat()}\n")
+                f.write(f"- CVE: {task.cve_id}\n")
+                f.write(f"- Agent: {getattr(self.backend, '__class__', type(self.backend)).__name__}\n")
+                f.write(f"- Model: {task.model}\n")
+                f.write(f"- Ablation mode: {getattr(self.backend, 'ablation_mode', '')}\n")
+                f.write(f"- Max iterations: {task.max_iteration}\n")
+                f.write(f"- Use cache: {use_cache}\n")
+                f.write(f"- Chroma collection: {collection_name or ''}\n")
+                f.write(f"- Vulnerable DB: {task.vuln_db_path}\n")
+                f.write(f"- Fixed DB: {task.fixed_db_path}\n")
+                f.write(f"- Diff: {task.fix_commit_diff}\n\n")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize run_report.md: {e}")
+
+    def _append_run_report(self, text: str) -> None:
+        if not self.run_report_path:
+            return
+        try:
+            with open(self.run_report_path, "a", encoding="utf-8") as f:
+                f.write(text)
+                if not text.endswith("\n"):
+                    f.write("\n")
+        except Exception as e:
+            self.logger.warning(f"Failed to append run_report.md: {e}")
+
+    def _snapshot_relevant_processes(self) -> str:
+        pattern = "chroma|chroma-mcp|codeql-lsp-mcp|codeql.*language-server|coco|ql_agent.py"
+        cmd = f"ps -eo pid,ppid,rss,vsz,etimes,args | egrep -i '{pattern}' | egrep -v 'egrep -i' || true"
+        try:
+            out = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.STDOUT)
+        except Exception as e:
+            out = f"<failed to collect process snapshot: {e}>"
+        return "```\n" + out.strip() + "\n```\n"
+
+    async def _start_process_monitor(self, output_dir: str, interval_sec: int = 10) -> None:
+        """Periodically record process/memory snapshots to results directory."""
+        self._monitor_stop = False
+        log_path = os.path.join(output_dir, "process_monitor.log")
+
+        async def _loop():
+            while not self._monitor_stop:
+                try:
+                    ts = datetime.now().isoformat()
+                    snap = self._snapshot_relevant_processes()
+                    with open(log_path, "a", encoding="utf-8") as f:
+                        f.write(f"=== {ts} ===\n")
+                        f.write(snap)
+                        f.write("\n")
+                except Exception:
+                    pass
+                await asyncio.sleep(interval_sec)
+
+        # ensure file exists with header
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write(f"# process_monitor.log\n# started: {datetime.now().isoformat()}\n")
+        except Exception:
+            pass
+
+        self._monitor_task = asyncio.create_task(_loop())
+
+    async def _stop_process_monitor(self) -> None:
+        self._monitor_stop = True
+        if self._monitor_task:
+            try:
+                await asyncio.wait_for(self._monitor_task, timeout=2)
+            except Exception:
+                pass
+            self._monitor_task = None
+
+    @staticmethod
+    def _summarize_tool_calls(tool_calls: list) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for tc in tool_calls or []:
+            fn = ((tc or {}).get("function") or {})
+            name = fn.get("name") or (tc or {}).get("name") or "<unknown>"
+            counts[name] = counts.get(name, 0) + 1
+        return counts
+
+    def _post_run_append_summary(self, output_dir: str, task: VulnAnalysisTask) -> None:
+        """Append a compact, structured summary to run_report.md in results directory."""
+        try:
+            phase_tool_summaries: List[str] = []
+            for fn in sorted(os.listdir(output_dir)):
+                if not fn.endswith("_coco_tool_calls.json"):
+                    continue
+                phase = fn[: -len("_coco_tool_calls.json")]
+                path = os.path.join(output_dir, fn)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        calls = json.load(f)
+                except Exception:
+                    calls = []
+                counts = self._summarize_tool_calls(calls)
+                # only show MCP + core tools prominently
+                mcp_counts = {k: v for k, v in counts.items() if k.startswith("mcp__")}
+                core_counts = {k: v for k, v in counts.items() if k in ("Read", "Write", "ApplyPatch", "Bash", "Grep", "Glob")}
+
+                def fmt(d: Dict[str, int]) -> str:
+                    items = sorted(d.items(), key=lambda x: (-x[1], x[0]))
+                    return ", ".join(f"{k}={v}" for k, v in items)
+
+                phase_tool_summaries.append(
+                    f"- {phase}: mcp=({fmt(mcp_counts)}) core=({fmt(core_counts)}) total={sum(counts.values())}"
+                )
+
+            # Iteration dynamics
+            compile_fail = 0
+            exec_miss = 0
+            success_iter = None
+            hashes: List[str] = []
+            for it in self.iteration_results:
+                if not getattr(it, "compilation_successful", False):
+                    compile_fail += 1
+                # miss on vuln DB: no vulnerable results or no tp methods
+                if getattr(it, "compilation_successful", False):
+                    if (getattr(it, "vuln_num_results", 0) == 0) and (getattr(it, "vulnerable_results", 0) == 0) and (getattr(it, "vuln_tp_methods", 0) == 0):
+                        exec_miss += 1
+                qpath = getattr(it, "query_path", None)
+                h = self._file_sha256(qpath) if qpath else None
+                hashes.append(h or "")
+                if success_iter is None and self._is_iteration_successful(it):
+                    success_iter = getattr(it, "iteration_number", None)
+
+            # Oscillation heuristics
+            repeat_count = 0
+            seen: Dict[str, int] = {}
+            for h in hashes:
+                if not h:
+                    continue
+                seen[h] = seen.get(h, 0) + 1
+                if seen[h] > 1:
+                    repeat_count += 1
+
+            abab = 0
+            for i in range(3, len(hashes)):
+                a, b, c, d = hashes[i - 3], hashes[i - 2], hashes[i - 1], hashes[i]
+                if a and b and a == c and b == d and a != b:
+                    abab += 1
+
+            # Cleanup check
+            try:
+                leftover = subprocess.check_output(
+                    "ps -eo pid,args | egrep -i 'coco --print|chroma-mcp|codeql-lsp-mcp/dist/index.js|codeql.*language-server' | egrep -v 'egrep -i' || true",
+                    shell=True,
+                    text=True,
+                    stderr=subprocess.STDOUT,
+                ).strip()
+            except Exception as e:
+                leftover = f"<failed to check leftover processes: {e}>"
+
+            self._append_run_report(
+                "\n\n# Post-run Summary\n\n"
+                f"- CVE: {task.cve_id}\n"
+                f"- Total iterations: {len(self.iteration_results)}\n"
+                f"- Success iteration: {success_iter if success_iter is not None else ''}\n"
+                f"- Compilation failures: {compile_fail}\n"
+                f"- Vuln-miss after compile (heuristic): {exec_miss}\n"
+                f"- Query hash repeats: {repeat_count}\n"
+                f"- ABAB oscillation windows: {abab}\n\n"
+                "## MCP/Tools Per Phase\n" + ("\n".join(phase_tool_summaries) if phase_tool_summaries else "- <no tool call logs>\n") + "\n\n"
+                "## Cleanup Check\n"
+                "```\n" + (leftover or "<none>") + "\n```\n"
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to append post-run summary: {e}")
+
+    @staticmethod
+    def _file_sha256(path: str) -> Optional[str]:
+        try:
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    h.update(chunk)
+            return h.hexdigest()
+        except Exception:
+            return None
 
     def setup_logging(self, output_dir: str):
         """Setup detailed logging for debugging"""
@@ -92,7 +280,7 @@ class QLAgentIterative:
             )
             await chroma_result.communicate()
             
-            # Kill codeql-mcp processes
+            # Kill CodeQL MCP processes
             codeql_mcp_cmd = f"pkill -f '{CODEQL_LSP_MCP_PATH}/dist/index.js'"
             codeql_mcp_result = await asyncio.create_subprocess_shell(
                 codeql_mcp_cmd,
@@ -145,6 +333,13 @@ class QLAgentIterative:
             os.makedirs(output_dir, exist_ok=True)
             self.setup_logging(output_dir)
 
+            # Initialize Markdown run report (requested by user)
+            self._init_run_report(task=task, output_dir=output_dir, use_cache=use_cache, collection_name=collection_name)
+            self._append_run_report("## Process Snapshot (Start)\n" + self._snapshot_relevant_processes())
+
+            # Start periodic process/memory monitor
+            await self._start_process_monitor(output_dir=output_dir, interval_sec=10)
+
             # Update task with the actual working directory that will be used
             task.working_dir = os.path.abspath(output_dir)
             qlpack_source = os.path.join(QL_CODER_ROOT_DIR, "qlpack.yml")
@@ -181,6 +376,8 @@ class QLAgentIterative:
                 task, config_path, output_dir, use_cache, collection_name,
                 phase1_output=phase1_output
             )
+
+            self._append_run_report("## Process Snapshot (After Phase 3)\n" + self._snapshot_relevant_processes())
             
             # Combine results
             result = {
@@ -208,7 +405,26 @@ class QLAgentIterative:
             self.logger.error(f"Iterative analysis failed: {e}")
             return {"success": False, "error": str(e), "analysis_dir": self.temp_dir}
         finally:
+            try:
+                await self._stop_process_monitor()
+            except Exception:
+                pass
+
             await self.cleanup_mcp_servers()
+            self._append_run_report("## Process Snapshot (After Cleanup)\n" + self._snapshot_relevant_processes())
+            # Backend-specific cleanup (e.g., restore `.mcp.json`)
+            try:
+                if hasattr(self.backend, "cleanup"):
+                    await self.backend.cleanup()
+            except Exception:
+                pass
+
+            # Append synthesized analysis summary into results directory.
+            try:
+                if getattr(self, "output_dir", None):
+                    self._post_run_append_summary(output_dir=self.output_dir, task=task)
+            except Exception:
+                pass
     
     async def _run_setup_phases(self, task: VulnAnalysisTask, config_path: str,
                                output_dir: str, use_cache: bool, collection_name: str) -> tuple:
@@ -242,6 +458,9 @@ class QLAgentIterative:
 
         previous_feedback = None
 
+        prev_query_hash: Optional[str] = None
+        seen_query_hashes: Dict[str, int] = {}
+
         for iteration in range(1, task.max_iteration + 1):
             self.logger.info(f"Starting iteration {iteration}/{task.max_iteration}")
 
@@ -273,10 +492,42 @@ class QLAgentIterative:
             )
             
             self.iteration_results.append(iteration_result)
+
+            # Track query content hash to detect oscillation/repeats.
+            query_path = getattr(iteration_result, "query_path", None)
+            query_hash = self._file_sha256(query_path) if query_path else None
+            if query_hash:
+                seen_query_hashes[query_hash] = seen_query_hashes.get(query_hash, 0) + 1
+            repeated = (query_hash is not None and (seen_query_hashes.get(query_hash, 0) > 1))
+            same_as_prev = (query_hash is not None and prev_query_hash is not None and query_hash == prev_query_hash)
+            prev_query_hash = query_hash or prev_query_hash
+
+            # Persist per-iteration status to the Markdown report.
+            try:
+                self._append_run_report(
+                    f"## Iteration: {iteration}\n\n"
+                    f"- Query path: {getattr(iteration_result, 'query_path', None)}\n"
+                    f"- Query sha256: {query_hash or ''}\n"
+                    f"- Same as previous: {same_as_prev}\n"
+                    f"- Repeated in run: {repeated}\n"
+                    f"- Compilation successful: {getattr(iteration_result, 'compilation_successful', False)}\n"
+                    f"- Execution successful: {getattr(iteration_result, 'success', False)}\n"
+                    f"- Vulnerable results: {getattr(iteration_result, 'vulnerable_results', 0)}\n"
+                    f"- Fixed results: {getattr(iteration_result, 'fixed_results', 0)}\n"
+                    f"- Vulnerable TP methods: {getattr(iteration_result, 'vuln_tp_methods', 0)}\n"
+                    f"- Fixed TP methods: {getattr(iteration_result, 'fixed_tp_methods', 0)}\n"
+                    f"- Vulnerable num results: {getattr(iteration_result, 'vuln_num_results', 0)}\n"
+                    f"- Fixed num results: {getattr(iteration_result, 'fixed_num_results', 0)}\n"
+                    f"- Error: {getattr(iteration_result, 'error', None) or ''}\n\n"
+                    f"### Relevant Processes\n{self._snapshot_relevant_processes()}"
+                )
+            except Exception:
+                pass
             
             # Check if we have a successful query
             if self._is_iteration_successful(iteration_result):
                 self.logger.info(f"Successful query found in iteration {iteration}")
+                self._append_run_report(f"## Final\n\n- Success at iteration: {iteration}\n- Final query: {iteration_result.query_path}\n")
                 return {
                     "success": True,
                     "final_query": iteration_result.query_path,
@@ -293,6 +544,8 @@ class QLAgentIterative:
             with open(feedback_path, 'w') as f:
                 f.write(previous_feedback or "No feedback generated")
             self.logger.info(f"Saved iteration {iteration} feedback: {feedback_path}")
+
+            self._append_run_report(f"- Feedback: {feedback_path}\n")
             
             # Log iteration summary
             self.logger.info(f"Iteration {iteration} summary: {previous_feedback[:200]}...")
@@ -356,6 +609,20 @@ class QLAgentIterative:
         metrics_path = os.path.join(output_dir, f"{phase_name}_metrics.json")
         with open(metrics_path, 'w') as f:
             json.dump(metrics, f, indent=2)
+
+        # Append per-phase status to the Markdown report (includes MCP tool call file for coco).
+        tool_calls_path = os.path.join(output_dir, f"{phase_name}_coco_tool_calls.json")
+        self._append_run_report(
+            f"## Phase: {phase_name}\n\n"
+            f"- Timestamp: {metrics['timestamp']}\n"
+            f"- Success: {success}\n"
+            f"- Return code: {result['returncode']}\n"
+            f"- Prompt: {prompt_path}\n"
+            f"- Output: {output_path}\n"
+            f"- Metrics: {metrics_path}\n"
+            f"- Tool calls: {tool_calls_path} ({'exists' if os.path.exists(tool_calls_path) else 'missing'})\n\n"
+            f"### Relevant Processes\n{self._snapshot_relevant_processes()}"
+        )
         
         
         return {
@@ -1044,12 +1311,12 @@ async def main():
     parser.add_argument("--fixed-db", help="Path to fixed CodeQL database")
     parser.add_argument("--diff", help="Path to fix commit diff file")
     parser.add_argument("--output-dir", default="output", help="Output directory")
-    parser.add_argument("--max-iteration", default=5, type=int, help="Max iterations")
+    parser.add_argument("--max-iteration", default=10, type=int, help="Max iterations")
     parser.add_argument("--cache-phase-output", action="store_true", default=True)
     parser.add_argument("--no-cache-phase-output", dest="cache_phase_output", action="store_false")
     parser.add_argument("--model", default="sonnet-4",
-                        choices=["sonnet-4", "sonnet-4.5", "gemini-2.5-pro", "gemini-2.5-flash","gpt-5"])
-    parser.add_argument("--agent", default="claude", choices=["claude", "gemini", "codex"],
+                        choices=["sonnet-4", "sonnet-4.5", "gemini-2.5-pro", "gemini-2.5-flash","gpt-5","gpt-5.5-2026-04-24"])
+    parser.add_argument("--agent", default="claude", choices=["claude", "gemini", "codex", "coco"],
                         help="Agent backend to use")
     parser.add_argument("--ablation-mode", default="full",
                         choices=["full", "no_tools", "no_lsp", "no_docs", "no_ast"],

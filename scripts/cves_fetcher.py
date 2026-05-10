@@ -372,7 +372,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description='Populate Chroma database with CVE data from NVD')
-    parser.add_argument('--api-key', type=str, help='NVD API key (optional, helps with rate limiting)')
+    parser.add_argument('--api-key', type=str, help='NVD API key (optional, helps with rate limiting)',default="bd2d6861-ecf3-4979-b22b-5cd33f1342e1")
     parser.add_argument('--batch-size', type=int, default=50, help='Number of CVEs per batch (default: 50)')
     parser.add_argument('--test', action='store_true', help='Test with only first 3 CVEs')
     parser.add_argument('--delay', type=float, default=0.6,

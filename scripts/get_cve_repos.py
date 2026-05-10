@@ -28,10 +28,96 @@ import sys
 import csv
 import argparse
 import subprocess
-from typing import List, Dict, Optional
+import selectors
+from typing import List, Dict, Optional, Sequence
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.config import PROJECT_INFO, CVES_PATH
+
+
+def stream_git_command(
+    cmd: Sequence[str],
+    cwd: Optional[str] = None,
+    prefix: str = "",
+    check: bool = True,
+) -> subprocess.CompletedProcess:
+    """Run a git command and stream progress output live.
+
+    Git usually writes clone/fetch progress to stderr with carriage returns,
+    so we stream both stdout and stderr and flush on either newline or CR.
+    """
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=0,
+    )
+
+    selector = selectors.DefaultSelector()
+    buffers = {}
+
+    if process.stdout is not None:
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        buffers["stdout"] = ""
+    if process.stderr is not None:
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        buffers["stderr"] = ""
+
+    stdout_chunks: List[str] = []
+    stderr_chunks: List[str] = []
+
+    while selector.get_map():
+        for key, _ in selector.select():
+            stream = key.fileobj
+            stream_name = key.data
+            chunk = stream.read(1)
+
+            if chunk == "":
+                remaining = buffers[stream_name]
+                if remaining:
+                    line = f"{prefix}{remaining}" if prefix else remaining
+                    print(line, flush=True)
+                    if stream_name == "stdout":
+                        stdout_chunks.append(remaining)
+                    else:
+                        stderr_chunks.append(remaining)
+                selector.unregister(stream)
+                stream.close()
+                continue
+
+            buffers[stream_name] += chunk
+
+            if chunk in ("\n", "\r"):
+                text = buffers[stream_name].rstrip("\r\n")
+                if text:
+                    line = f"{prefix}{text}" if prefix else text
+                    print(line, flush=True)
+                    if stream_name == "stdout":
+                        stdout_chunks.append(text + "\n")
+                    else:
+                        stderr_chunks.append(text + "\n")
+                buffers[stream_name] = ""
+
+    returncode = process.wait()
+    stdout_text = "".join(stdout_chunks)
+    stderr_text = "".join(stderr_chunks)
+
+    if check and returncode != 0:
+        raise subprocess.CalledProcessError(
+            returncode=returncode,
+            cmd=list(cmd),
+            output=stdout_text,
+            stderr=stderr_text,
+        )
+
+    return subprocess.CompletedProcess(
+        args=list(cmd),
+        returncode=returncode,
+        stdout=stdout_text,
+        stderr=stderr_text,
+    )
 
 
 def load_project_info() -> Dict[str, Dict]:
@@ -102,17 +188,118 @@ def clone_repository(github_url: str, clone_dir: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
+    clone_cmd = [
+        'git', 'clone',
+        '--filter=blob:none',
+        '--no-checkout',
+        '--progress',
+        '--no-tags',
+        github_url,
+        clone_dir,
+    ]
+
     try:
-        subprocess.run(
-            ['git', 'clone', '--quiet', github_url, clone_dir],
-            check=True,
-            capture_output=True,
-            text=True
+        stream_git_command(clone_cmd, prefix="    [clone] ")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"  Partial clone failed, falling back to full clone...")
+        if os.path.exists(clone_dir):
+            subprocess.run(['rm', '-rf', clone_dir], check=False)
+
+        try:
+            stream_git_command(
+                ['git', 'clone', '--progress', '--no-tags', github_url, clone_dir],
+                prefix="    [clone] "
+            )
+            return True
+        except subprocess.CalledProcessError as fallback_error:
+            print(f"  Error cloning repository: {fallback_error.stderr or e.stderr}")
+            return False
+
+
+def fetch_commit(repo_path: str, commit_id: str) -> bool:
+    """Try to fetch a specific commit with live progress output."""
+    try:
+        stream_git_command(
+            ['git', 'fetch', '--progress', '--no-tags', 'origin', commit_id],
+            cwd=repo_path,
+            prefix=f"    [fetch {commit_id[:12]}] "
         )
         return True
     except subprocess.CalledProcessError as e:
-        print(f"  Error cloning repository: {e.stderr}")
+        print(f"  Warning: targeted fetch failed for {commit_id[:12]}: {e.stderr.strip() or e}")
         return False
+
+
+def fetch_all_refs(repo_path: str) -> bool:
+    """Fallback fetch for cases where targeted commit fetch is not enough."""
+    try:
+        stream_git_command(
+            ['git', 'fetch', '--all', '--tags', '--progress'],
+            cwd=repo_path,
+            prefix="    [fetch-all] "
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"  Warning: full fetch failed: {e.stderr.strip() or e}")
+        return False
+
+
+def ensure_commits_available(repo_path: str, commit_ids: List[str]) -> bool:
+    """Ensure all requested commits exist locally, using targeted fetch first."""
+    missing_commits = []
+
+    for commit_id in commit_ids:
+        result = subprocess.run(
+            ['git', 'cat-file', '-e', f'{commit_id}^{{commit}}'],
+            cwd=repo_path,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            missing_commits.append(commit_id)
+
+    if not missing_commits:
+        return True
+
+    print(f"  Ensuring {len(missing_commits)} required commit(s) are available locally...")
+    targeted_fetch_ok = True
+    for commit_id in missing_commits:
+        if not fetch_commit(repo_path, commit_id):
+            targeted_fetch_ok = False
+            break
+
+    if targeted_fetch_ok:
+        still_missing = []
+        for commit_id in missing_commits:
+            result = subprocess.run(
+                ['git', 'cat-file', '-e', f'{commit_id}^{{commit}}'],
+                cwd=repo_path,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode != 0:
+                still_missing.append(commit_id)
+        if not still_missing:
+            return True
+        missing_commits = still_missing
+
+    print("  Targeted fetch was insufficient, falling back to fetching repository refs...")
+    if not fetch_all_refs(repo_path):
+        return False
+
+    for commit_id in missing_commits:
+        result = subprocess.run(
+            ['git', 'cat-file', '-e', f'{commit_id}^{{commit}}'],
+            cwd=repo_path,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            print(f"  Error: commit still unavailable after fallback fetch: {commit_id}")
+            return False
+
+    return True
 
 
 def generate_diff(repo_path: str, vulnerable_commit: str, fix_commit: str) -> Optional[str]:
@@ -188,20 +375,10 @@ def process_cve(cve_id: str, cve_info: Dict, force: bool = False) -> bool:
     else:
         print(f"  Repository already exists: {repo_dir}")
 
-    # Fetch all commits to ensure we have the ones we need
-    print(f"  Fetching all commits...")
-    try:
-        subprocess.run(
-            ['git', 'fetch', '--all', '--quiet'],
-            cwd=repo_dir,
-            check=True,
-            capture_output=True
-        )
-    except subprocess.CalledProcessError:
-        pass  # May fail if already up to date
-
     # Get the latest fix commit
     if len(fix_commits) > 1:
+        if not ensure_commits_available(repo_dir, [vulnerable_commit] + fix_commits):
+            return False
         print(f"  Multiple fix commits found ({len(fix_commits)}), selecting latest...")
         fix_commit = get_latest_commit(repo_dir, fix_commits)
         if not fix_commit:
@@ -210,6 +387,9 @@ def process_cve(cve_id: str, cve_info: Dict, force: bool = False) -> bool:
         print(f"  Selected fix commit: {fix_commit[:12]}")
     else:
         fix_commit = fix_commits[0]
+
+    if not ensure_commits_available(repo_dir, [vulnerable_commit, fix_commit]):
+        return False
 
     # Generate diff
     if not os.path.exists(diff_file) or force:
@@ -232,12 +412,10 @@ def process_cve(cve_id: str, cve_info: Dict, force: bool = False) -> bool:
     # Checkout the vulnerable commit in the repo
     print(f"  Checking out vulnerable commit: {vulnerable_commit[:12]}")
     try:
-        subprocess.run(
-            ['git', 'checkout', '--quiet', vulnerable_commit],
+        stream_git_command(
+            ['git', 'checkout', '--progress', vulnerable_commit],
             cwd=repo_dir,
-            check=True,
-            capture_output=True,
-            text=True
+            prefix="    [checkout] "
         )
     except subprocess.CalledProcessError as e:
         print(f"  Warning: Could not checkout vulnerable commit: {e.stderr}")
