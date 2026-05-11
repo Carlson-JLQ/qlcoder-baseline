@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import csv
 import importlib
 import json
@@ -24,13 +25,6 @@ except Exception:
 
 LOGGER = logging.getLogger(__name__)
 ROLE_ORDER = ("source", "sink", "barrier", "flow")
-RECOMMENDATION_ACTIONS = {
-    "source": "expand_source_definition",
-    "sink": "expand_sink_definition",
-    "barrier": "remove_overly_broad_barrier",
-    "flow": "expand_additional_flow_step",
-    "final": "inspect_final_where_constraints",
-}
 
 
 def resolve_repo_root() -> Path:
@@ -142,6 +136,41 @@ def load_query_evaluator_class(fix_info_path: Path):
                 del sys.modules[module_name]
             module = importlib.import_module(module_name)
             return module.QueryEvaluator
+        except Exception as exc:
+            last_exc = exc
+
+    assert last_exc is not None
+    raise last_exc
+
+
+def load_query_execution_runner(codeql_path: str):
+    module_names = []
+    if __package__:
+        module_names.append(f"{__package__}.query_subagents_evaluation")
+    module_names.append("query_subagents_evaluation")
+
+    last_exc: Optional[Exception] = None
+    for module_name in module_names:
+        try:
+            module = importlib.import_module(module_name)
+            return module.run_query_with_evaluation_results
+        except Exception as exc:
+            last_exc = exc
+
+    stub = types.ModuleType("config")
+    stub.CODEQL_PATH = codeql_path
+    sys.modules["config"] = stub
+
+    src_stub = types.ModuleType("src.config")
+    src_stub.CODEQL_PATH = codeql_path
+    sys.modules["src.config"] = src_stub
+
+    for module_name in module_names:
+        try:
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+            module = importlib.import_module(module_name)
+            return module.run_query_with_evaluation_results
         except Exception as exc:
             last_exc = exc
 
@@ -476,8 +505,6 @@ def to_component_run_dict(result: Optional[RunCountResult], alignment: Optional[
             "success": False,
             "num_results": 0,
             "error": "not_run",
-            "alignment_success": None,
-            "alignment_error": None,
             "sarif_path": None,
             "num_aligned_files": 0,
             "num_aligned_methods": 0,
@@ -492,8 +519,6 @@ def to_component_run_dict(result: Optional[RunCountResult], alignment: Optional[
         "success": result.success,
         "num_results": result.num_results,
         "error": result.error,
-        "alignment_success": None,
-        "alignment_error": None,
         "sarif_path": None,
         "num_aligned_files": 0,
         "num_aligned_methods": 0,
@@ -507,8 +532,6 @@ def to_component_run_dict(result: Optional[RunCountResult], alignment: Optional[
     if alignment is not None:
         run_dict.update(
             {
-                "alignment_success": alignment.success,
-                "alignment_error": alignment.error,
                 "sarif_path": alignment.sarif_path,
                 "num_aligned_files": alignment.num_aligned_files,
                 "num_aligned_methods": alignment.num_aligned_methods,
@@ -523,6 +546,43 @@ def to_component_run_dict(result: Optional[RunCountResult], alignment: Optional[
     return run_dict
 
 
+PROBLEM_STATUS_SET = {
+    "missing_component",
+    "compile_failed",
+    "empty",
+    "only_fixed",
+    "off_target",
+    "overblocking_suspect",
+    "non_discriminative",
+    "weak_but_present",
+    "weak_bridge",
+    "noisy_bridge",
+    "others",
+}
+
+
+def _default_confidence(status: str) -> float:
+    return {
+        "missing_component": 0.95,
+        "compile_failed": 0.95,
+        "empty": 0.90,
+        "only_fixed": 0.85,
+        "off_target": 0.82,
+        "good_anchor": 0.86,
+        "weak_but_present": 0.72,
+        "absent": 0.50,
+        "repair_only": 0.85,
+        "useful_repair_signal": 0.75,
+        "overblocking_suspect": 0.85,
+        "non_discriminative": 0.60,
+        "likely_not_needed": 0.55,
+        "useful_bridge": 0.80,
+        "noisy_bridge": 0.60,
+        "weak_bridge": 0.65,
+        "others": 1.0,
+    }.get(status, 0.50)
+
+
 def classify_component_status(
     role: str,
     present_in_query: bool,
@@ -534,231 +594,139 @@ def classify_component_status(
     target_alignment_available: bool,
     original_query_vuln_results: int,
     original_query_fixed_results: int,
-) -> tuple[str, float, str]:
+) -> tuple[str, float]:
     if not present_in_query:
         if role == "flow" and (original_query_vuln_results > 0 or original_query_fixed_results > 0):
-            return ("likely_not_needed", 0.55, "Original query has results even without an explicit isAdditionalFlowStep.")
-        return ("missing_component", 0.95, f"The original query does not define the {role} component.")
+            return ("likely_not_needed", _default_confidence("likely_not_needed"))
+        return ("missing_component", _default_confidence("missing_component"))
 
     if compile_success is False:
-        return ("compile_failed", 0.95, f"The {role} probe does not compile independently.")
+        return ("compile_failed", _default_confidence("compile_failed"))
 
     if role == "barrier":
         if vuln_count == 0 and fixed_count == 0:
-            return ("absent", 0.50, "Barrier probe returns no matches on either version.")
+            return ("absent", _default_confidence("absent"))
         if vuln_count == 0 and fixed_count > 0:
-            return ("repair_only", 0.85, "Barrier evidence appears only in the fixed version, which is usually a repair-side signal.")
-        if vuln_count > fixed_count * 2 and original_query_vuln_results == 0 and original_query_fixed_results == 0:
-            return ("overblocking_suspect", 0.85, "Barrier evidence is much stronger on the vulnerable side while the original query remains zero-hit.")
+            return ("repair_only", _default_confidence("repair_only"))
         if fixed_count > vuln_count:
-            return ("useful_repair_signal", 0.75, "Barrier evidence is stronger in the fixed version than in the vulnerable version.")
-        return ("non_discriminative", 0.60, "Barrier probe matches both versions with weak discrimination.")
+            return ("useful_repair_signal", _default_confidence("useful_repair_signal"))
+        if (
+            fixed_count >= 0
+            and vuln_count > fixed_count * 2
+            and original_query_vuln_results == 0
+            and original_query_fixed_results == 0
+        ):
+            return ("overblocking_suspect", _default_confidence("overblocking_suspect"))
+        if vuln_count > 0 and fixed_count > 0:
+            return ("non_discriminative", _default_confidence("non_discriminative"))
+        return ("others", _default_confidence("others"))
 
     if role == "flow":
         if vuln_count == 0 and fixed_count == 0:
-            return ("empty", 0.90, "Flow probe returns no bridge facts on either version.")
+            return ("empty", _default_confidence("empty"))
         if vuln_count > 0 and fixed_count == 0:
-            return ("useful_bridge", 0.80, "Flow probe finds bridge facts mainly on the vulnerable side.")
-        if vuln_count > 0 and fixed_count > 0 and abs(vuln_count - fixed_count) <= max(1, min(vuln_count, fixed_count) // 2):
-            return ("noisy_bridge", 0.60, "Flow probe matches both versions with limited discrimination.")
-        return ("weak_bridge", 0.65, "Flow probe has some bridge evidence, but it is not strongly diagnostic yet.")
-
-    if target_alignment_available:
-        if vuln_aligned_methods == 0 and fixed_aligned_methods == 0 and vuln_count > 0:
-            return (
-                "weak_but_present",
-                0.78,
-                f"{role.capitalize()} probe has matches, but none align with target methods, suggesting off-target modeling.",
-            )
-        if vuln_aligned_methods > 0 and fixed_aligned_methods == 0:
-            return (
-                "good_anchor",
-                0.86,
-                f"{role.capitalize()} probe aligns with target methods on the vulnerable side and not on the fixed side.",
-            )
-        if vuln_aligned_methods > 0 and fixed_aligned_methods > 0:
-            return (
-                "weak_but_present",
-                0.72,
-                f"{role.capitalize()} probe aligns with target methods on both versions, so the component exists but is not discriminative.",
-            )
+            return ("useful_bridge", _default_confidence("useful_bridge"))
+        if (
+            vuln_count > 0
+            and fixed_count > 0
+            and abs(vuln_count - fixed_count) <= max(1, min(vuln_count, fixed_count) // 2)
+        ):
+            return ("noisy_bridge", _default_confidence("noisy_bridge"))
+        if vuln_count > 0 or fixed_count > 0:
+            return ("weak_bridge", _default_confidence("weak_bridge"))
+        return ("others", _default_confidence("others"))
 
     if vuln_count == 0 and fixed_count == 0:
-        return ("empty", 0.90, f"{role.capitalize()} probe returns no matches on either version.")
+        return ("empty", _default_confidence("empty"))
     if vuln_count == 0 and fixed_count > 0:
-        return ("only_fixed", 0.85, f"{role.capitalize()} probe matches only on the fixed version, which suggests reversed or misplaced modeling.")
-    if vuln_count > 0 and fixed_count == 0:
-        return ("good_anchor", 0.80, f"{role.capitalize()} probe finds evidence on the vulnerable side only.")
-    return ("weak_but_present", 0.67, f"{role.capitalize()} probe matches both versions and has limited discrimination.")
+        return ("only_fixed", _default_confidence("only_fixed"))
+
+    if target_alignment_available:
+        if vuln_count > 0 and vuln_aligned_methods == 0 and fixed_aligned_methods == 0:
+            return ("off_target", _default_confidence("off_target"))
+        if vuln_aligned_methods > 0 and fixed_aligned_methods == 0:
+            return ("good_anchor", _default_confidence("good_anchor"))
+        if vuln_aligned_methods > 0 and fixed_aligned_methods > 0:
+            return ("weak_but_present", _default_confidence("weak_but_present"))
+
+    if vuln_count > 0 and fixed_count > 0:
+        return ("weak_but_present", _default_confidence("weak_but_present"))
+
+    return ("others", _default_confidence("others"))
 
 
-def build_component_signals(
-    vuln_count: int,
-    fixed_count: int,
-    vuln_alignment: Optional[AlignmentResult] = None,
-    fixed_alignment: Optional[AlignmentResult] = None,
+def build_problem_components(components: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for role in ROLE_ORDER:
+        verdict = components[role]["verdict"]
+        status = verdict["status"]
+        if status in PROBLEM_STATUS_SET:
+            items.append(
+                {
+                    "role": role,
+                    "status": status,
+                    "confidence": verdict["confidence"],
+                }
+            )
+    return items
+
+
+def evaluate_original_query_summary(
+    *,
+    query_path: Path,
+    cve_id: str,
+    vuln_db_path: Path,
+    fixed_db_path: Path,
+    runtime_dir: Path,
+    codeql_path: str,
 ) -> dict[str, Any]:
-    target_alignment_available = False
-    hits_target_on_vuln = None
-    hits_target_on_fixed = None
-    if vuln_alignment is not None or fixed_alignment is not None:
-        target_alignment_available = bool(
-            (vuln_alignment and vuln_alignment.success) or (fixed_alignment and fixed_alignment.success)
-        )
-        hits_target_on_vuln = vuln_alignment.num_aligned_methods > 0 if vuln_alignment and vuln_alignment.success else None
-        hits_target_on_fixed = fixed_alignment.num_aligned_methods > 0 if fixed_alignment and fixed_alignment.success else None
-
-    return {
-        "vuln_has_hits": vuln_count > 0,
-        "fixed_has_hits": fixed_count > 0,
-        "delta_results": vuln_count - fixed_count,
-        "target_alignment_available": target_alignment_available,
-        "hits_target_on_vuln": hits_target_on_vuln,
-        "hits_target_on_fixed": hits_target_on_fixed,
-        "discriminative": vuln_count != fixed_count,
+    compile_result = compile_query(query_path, codeql_path)
+    summary = {
+        "compile_success": compile_result["success"],
+        "vuln_num_results": 0,
+        "fixed_num_results": 0,
+        "vuln_recall_method": None,
+        "fixed_recall_method": None,
+        "notes": [],
     }
 
+    if not compile_result["success"]:
+        summary["notes"].append("Original query compilation failed.")
+        return summary
 
-def localize_failure(components: dict[str, dict[str, Any]], original_query: dict[str, Any]) -> dict[str, Any]:
-    source_status = components["source"]["verdict"]["status"]
-    sink_status = components["sink"]["verdict"]["status"]
-    barrier_status = components["barrier"]["verdict"]["status"]
-    flow_status = components["flow"]["verdict"]["status"]
-    original_zero_hit = (
-        original_query.get("vuln_num_results", 0) == 0
-        and original_query.get("fixed_num_results", 0) == 0
+    try:
+        query_runner = load_query_execution_runner(codeql_path)
+        _, vuln_eval, fixed_eval, _ = asyncio.run(
+            query_runner(
+                str(query_path),
+                str(vuln_db_path),
+                str(fixed_db_path),
+                cve_id,
+                output_dir=str(runtime_dir),
+            )
+        )
+        summary.update(
+            {
+                "vuln_num_results": vuln_eval.num_results,
+                "fixed_num_results": fixed_eval.num_results,
+                "vuln_recall_method": bool(vuln_eval.recall_method),
+                "fixed_recall_method": bool(fixed_eval.recall_method),
+            }
+        )
+        return summary
+    except Exception as exc:
+        LOGGER.warning("Official evaluation fallback for original query failed: %s", exc)
+
+    original_vuln = run_query_count(query_path, vuln_db_path, codeql_path, runtime_dir, "original_vulnerable")
+    original_fixed = run_query_count(query_path, fixed_db_path, codeql_path, runtime_dir, "original_fixed")
+    summary.update(
+        {
+            "vuln_num_results": original_vuln.num_results if original_vuln.success else 0,
+            "fixed_num_results": original_fixed.num_results if original_fixed.success else 0,
+        }
     )
-
-    if components["source"]["signals"]["target_alignment_available"] and not components["source"]["signals"]["hits_target_on_vuln"]:
-        return {
-            "primary_suspect": "source",
-            "secondary_suspects": [],
-            "diagnosis": "Source probe has matches, but none align with vulnerable target methods, so source modeling is likely off-target.",
-            "confidence": 0.87,
-            "failure_pattern": "source_off_target",
-        }
-
-    if components["sink"]["signals"]["target_alignment_available"] and not components["sink"]["signals"]["hits_target_on_vuln"]:
-        return {
-            "primary_suspect": "sink",
-            "secondary_suspects": [],
-            "diagnosis": "Sink probe has matches, but none align with vulnerable target methods, so sink modeling is likely off-target.",
-            "confidence": 0.89,
-            "failure_pattern": "sink_off_target",
-        }
-
-    if source_status in {"missing_component", "compile_failed", "empty", "only_fixed"}:
-        return {
-            "primary_suspect": "source",
-            "secondary_suspects": [],
-            "diagnosis": "Source component is missing, empty, or reversed, so the query likely fails before taint entry modeling is established.",
-            "confidence": 0.90,
-            "failure_pattern": "source_missing",
-        }
-
-    if sink_status in {"missing_component", "compile_failed", "empty", "only_fixed"}:
-        return {
-            "primary_suspect": "sink",
-            "secondary_suspects": [],
-            "diagnosis": "Source is present, but sink modeling appears missing or ineffective.",
-            "confidence": 0.88,
-            "failure_pattern": "sink_missing",
-        }
-
-    if flow_status in {"missing_component", "compile_failed", "empty"} and source_status not in {"missing_component", "empty"} and sink_status not in {"missing_component", "empty"}:
-        return {
-            "primary_suspect": "flow",
-            "secondary_suspects": ["barrier"] if barrier_status == "overblocking_suspect" else [],
-            "diagnosis": "Source and sink are present, but flow bridging is missing or broken.",
-            "confidence": 0.90,
-            "failure_pattern": "source_sink_present_but_flow_missing",
-        }
-
-    if barrier_status == "overblocking_suspect" and original_zero_hit:
-        return {
-            "primary_suspect": "barrier",
-            "secondary_suspects": ["flow"],
-            "diagnosis": "Barrier evidence is disproportionately strong on the vulnerable side while the original query still returns zero hits, suggesting overblocking.",
-            "confidence": 0.85,
-            "failure_pattern": "overblocking_barrier",
-        }
-
-    if all(
-        components[role]["verdict"]["status"] not in {"missing_component", "compile_failed", "empty", "only_fixed"}
-        for role in ("source", "sink")
-    ) and barrier_status in {"non_discriminative", "useful_repair_signal", "repair_only"} and flow_status not in {"missing_component", "compile_failed", "empty"}:
-        return {
-            "primary_suspect": "final",
-            "secondary_suspects": [],
-            "diagnosis": "All major components seem present, so the remaining issue is more likely in final query constraints, path usage, or helper predicates.",
-            "confidence": 0.70,
-            "failure_pattern": "final_query_constraint_issue",
-        }
-
-    return {
-        "primary_suspect": "unknown",
-        "secondary_suspects": [],
-        "diagnosis": "Probe evidence is inconclusive; the query may have multiple weak components or noisy modeling.",
-        "confidence": 0.50,
-        "failure_pattern": "inconclusive",
-    }
-
-
-def build_recommendations(localization: dict[str, Any], components: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    suspect = localization["primary_suspect"]
-    recommendations: list[dict[str, Any]] = []
-
-    if suspect in {"source", "sink", "barrier", "flow"}:
-        action = RECOMMENDATION_ACTIONS[suspect]
-        rationale = localization["diagnosis"]
-        recommendations.append(
-            {
-                "priority": 1,
-                "component": suspect,
-                "action": action,
-                "rationale": rationale,
-            }
-        )
-
-    if suspect == "final":
-        recommendations.append(
-            {
-                "priority": 1,
-                "component": "final",
-                "action": RECOMMENDATION_ACTIONS["final"],
-                "rationale": localization["diagnosis"],
-            }
-        )
-        recommendations.append(
-            {
-                "priority": 2,
-                "component": "final",
-                "action": "inspect_path_graph_usage",
-                "rationale": "Component-level probes look acceptable, so final query composition is the next likely failure point.",
-            }
-        )
-
-    if suspect == "flow" and components["barrier"]["verdict"]["status"] == "overblocking_suspect":
-        recommendations.append(
-            {
-                "priority": 2,
-                "component": "barrier",
-                "action": "remove_overly_broad_barrier",
-                "rationale": "Barrier behavior may also be suppressing otherwise plausible flow paths.",
-            }
-        )
-
-    if not recommendations:
-        recommendations.append(
-            {
-                "priority": 1,
-                "component": "final",
-                "action": "inspect_helper_predicates",
-                "rationale": "Probe evidence is inconclusive, so helper predicates and extra constraints should be inspected next.",
-            }
-        )
-
-    return recommendations
+    summary["notes"].append("Fell back to count-only original query evaluation.")
+    return summary
 
 
 def markdown_summary(report: dict[str, Any]) -> str:
@@ -779,15 +747,28 @@ def markdown_summary(report: dict[str, Any]) -> str:
         f"- CVE: `{report['meta']['cve_id']}`",
         f"- Query: `{report['meta']['query_path']}`",
         f"- Probe dir: `{report['meta']['probe_dir']}`",
-        f"- Primary suspect: `{report['localization']['primary_suspect']}`",
-        f"- Failure pattern: `{report['localization']['failure_pattern']}`",
-        f"- Diagnosis: {report['localization']['diagnosis']}",
         f"- Target files: `{report['target_context']['target_file_count']}`",
         f"- Target methods: `{report['target_context']['target_method_count']}`",
         "",
-        "## Components",
+        "## Problem Components",
         "",
     ]
+
+    if report["problem_components"]:
+        for item in report["problem_components"]:
+            lines.append(
+                f"- `{item['role']}`: status=`{item['status']}`, confidence=`{item['confidence']}`"
+            )
+    else:
+        lines.append("- none")
+
+    lines.extend(
+        [
+            "",
+            "## Components",
+            "",
+        ]
+    )
 
     for role in ROLE_ORDER:
         component = report["components"][role]
@@ -796,15 +777,16 @@ def markdown_summary(report: dict[str, Any]) -> str:
         fixed_run = component["run"]["fixed"]
         vuln_num = vuln_run["num_results"]
         fixed_num = fixed_run["num_results"]
-        lines.append(f"- `{role}`: `{verdict['status']}` | vuln=`{vuln_num}` fixed=`{fixed_num}`")
-        lines.append(f"  - reason: {verdict['reason']}")
+        lines.append(
+            f"- `{role}`: `{verdict['status']}` | confidence=`{verdict['confidence']}` | vuln=`{vuln_num}` fixed=`{fixed_num}`"
+        )
         lines.append(
             "  - target alignment: "
             f"vuln files=`{vuln_run['num_aligned_files']}` methods=`{vuln_run['num_aligned_methods']}`; "
             f"fixed files=`{fixed_run['num_aligned_files']}` methods=`{fixed_run['num_aligned_methods']}`"
         )
 
-        if component["signals"]["target_alignment_available"]:
+        if vuln_run["sarif_path"] or fixed_run["sarif_path"]:
             lines.append(
                 "  - target coverage: "
                 f"vuln file=`{vuln_run['target_file_coverage']:.2f}` method=`{vuln_run['target_method_coverage']:.2f}`; "
@@ -819,10 +801,6 @@ def markdown_summary(report: dict[str, Any]) -> str:
             add_list_block(lines, "fixed hit files", fixed_run["hit_files"])
             add_list_block(lines, "fixed hit methods", fixed_run["hit_methods"])
 
-    lines.extend(["", "## Recommendations", ""])
-    for item in report["recommendations"]:
-        lines.append(f"- P{item['priority']} `{item['component']}` -> `{item['action']}`: {item['rationale']}")
-
     return "\n".join(lines) + "\n"
 
 
@@ -835,6 +813,8 @@ def evaluate_probe_query(
     output_dir: Optional[Path],
     codeql_path: str,
     fix_info_path: Path,
+    probe_kind_mode: str = "hybrid",
+    original_query_summary: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     if output_dir is None:
         output_dir = query_path.parent / f"{query_path.stem}-probe-evaluation"
@@ -845,31 +825,20 @@ def evaluate_probe_query(
         output_dir=output_dir,
         codeql_path=codeql_path,
         compile_components=True,
+        probe_kind_mode=probe_kind_mode,
     )
 
     target_context = load_target_context(cve_id, fix_info_path)
-    original_compile = compile_query(query_path, codeql_path)
     runtime_dir = output_dir / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
-
-    original_vuln = None
-    original_fixed = None
-    if original_compile["success"]:
-        original_vuln = run_query_count(query_path, vuln_db_path, codeql_path, runtime_dir, "original_vulnerable")
-        original_fixed = run_query_count(query_path, fixed_db_path, codeql_path, runtime_dir, "original_fixed")
-
-    original_query = {
-        "compile_success": original_compile["success"],
-        "compile_error": None if original_compile["success"] else ((original_compile["stderr"] or "").strip() or None),
-        "compile_log": (original_compile["stderr"] or "").strip() or None,
-        "vuln_num_results": original_vuln.num_results if original_vuln else 0,
-        "fixed_num_results": original_fixed.num_results if original_fixed else 0,
-        "vuln_recall_method": None,
-        "fixed_recall_method": None,
-        "notes": [
-            "第一版 probe_evaluation 仅做计数级诊断，不计算 SARIF 方法级 recall。"
-        ],
-    }
+    original_query = original_query_summary or evaluate_original_query_summary(
+        query_path=query_path,
+        cve_id=cve_id,
+        vuln_db_path=vuln_db_path,
+        fixed_db_path=fixed_db_path,
+        runtime_dir=runtime_dir,
+        codeql_path=codeql_path,
+    )
 
     present_components = build_presence_map(structural_report)
     components: dict[str, dict[str, Any]] = {}
@@ -928,7 +897,7 @@ def evaluate_probe_query(
         target_alignment_available = bool(
             (vuln_alignment and vuln_alignment.success) or (fixed_alignment and fixed_alignment.success)
         )
-        status, confidence, reason = classify_component_status(
+        status, confidence = classify_component_status(
             role=role,
             present_in_query=component["present_in_query"],
             compile_success=component["compile_success"],
@@ -952,16 +921,13 @@ def evaluate_probe_query(
                 "vulnerable": to_component_run_dict(vuln_result, vuln_alignment),
                 "fixed": to_component_run_dict(fixed_result, fixed_alignment),
             },
-            "signals": build_component_signals(vuln_count, fixed_count, vuln_alignment, fixed_alignment),
             "verdict": {
                 "status": status,
                 "confidence": confidence,
-                "reason": reason,
             },
         }
 
-    localization = localize_failure(components, original_query)
-    recommendations = build_recommendations(localization, components)
+    problem_components = build_problem_components(components)
 
     report = {
         "schema_version": "v1",
@@ -977,8 +943,7 @@ def evaluate_probe_query(
         "target_context": target_context,
         "original_query": original_query,
         "components": components,
-        "localization": localization,
-        "recommendations": recommendations,
+        "problem_components": problem_components,
         "structural_extract_summary_path": structural_report.get("summary_json_path"),
     }
 
@@ -1013,6 +978,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=resolve_default_codeql_path(),
         help="Path to the codeql executable.",
     )
+    parser.add_argument(
+        "--probe-kind-mode",
+        default="hybrid",
+        choices=("hybrid", "all-table", "all-problem"),
+        help="Probe generation mode passed to structural_extract.py.",
+    )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print the final JSON report.")
     return parser.parse_args(argv)
 
@@ -1030,6 +1001,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             output_dir=args.output_dir.resolve() if args.output_dir else None,
             codeql_path=args.codeql_path,
             fix_info_path=args.fix_info_path.resolve(),
+            probe_kind_mode=args.probe_kind_mode,
         )
     except Exception as exc:  # pragma: no cover
         LOGGER.error("%s", exc)

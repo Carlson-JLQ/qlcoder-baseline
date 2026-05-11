@@ -54,24 +54,21 @@
 
 ## 从 Probe 评估结果直接选择修复行为
 
-为了让后续系统可以从 `probe_evaluation` 的结果直接得到修复建议，行为选择规则必须和评估标签对齐。
+为了让后续系统可以从 `probe_evaluation` 的结果直接得到修复建议，行为选择规则必须严格对齐
+`probe-evaluation-design.md` 里的 `verdict.status` 和 `problem_components`。
 
 这里采用的原则是：
 
-- 每个组件的 `status` 直接映射到一个主修复行为
-- 必要时再给一个次行为，作为备选
-- 多个组件同时异常时，不只保留一个主嫌疑，而是允许同时附加多个组件建议
+- 先读取顶层 `problem_components`
+- 对于每个 `problem_components[i].role`，回到 `components[role]` 读取该组件完整字段内容
+- 只依据这个组件自己的 `verdict.status` 和已有评估字段，选择修复行为与专用 prompt
+- 不再额外构造 `localization`、`primary suspect`、`failure_pattern` 之类中间字段
 
-推荐的输出逻辑不是：
+也就是说，推荐的处理路径是：
 
-- “只给一个 localization 结果”
-
-而是：
-
-- `source` 根据自己的 `status` 选行为
-- `sink` 根据自己的 `status` 选行为
-- `barrier` 根据自己的 `status` 选行为
-- `flow` 根据自己的 `status` 选行为
+- `problem_components` 决定“哪些组件值得进入后续修复建议”
+- `components[role]` 决定“这个组件当前是什么状态、有哪些事实依据”
+- `verdict.status` 决定“应该给什么修复行为和什么 prompt”
 
 这样后续 prompt 就能直接拼成：
 
@@ -81,6 +78,8 @@
 - flow 问题描述 + flow 修复行为 + flow prompt
 
 ## 组件级映射规则
+
+这一节的主映射只保留会进入 `problem_components` 的问题状态，也就是后续会真正转成修复建议的状态。
 
 ### Source 映射
 
@@ -100,19 +99,20 @@
   - 主行为：`替换 Source`
   - 推荐动作：`replace_reversed_source`
   - 说明：source 建模方向反了，应直接替换掉错误入口
+- `off_target`
+  - 主行为：`替换 Source`
+  - 推荐动作：`replace_off_target_source`
+  - 说明：有结果但不贴近目标文件或目标方法，应直接替换原 source 主体
 - `weak_but_present`
-  - 如果 `aligned_methods = 0`
-    - 主行为：`替换 Source`
-    - 推荐动作：`replace_off_target_source`
-    - 说明：有结果但完全不对齐，是典型 `source_off_target`
-  - 如果 `aligned_methods > 0`
-    - 主行为：`保留`
-    - 次行为：`轻微收缩`
-    - 推荐动作：`keep_source_stable`
-- `good_anchor`
-  - 主行为：`保留`
-  - 推荐动作：`keep_source_stable`
-  - 说明：source 已经足够接近目标，不应优先修改
+  - 主行为：`轻微收缩`
+  - 次行为：`保留`
+  - 推荐动作：`lightly_narrow_source`
+  - 说明：source 有部分有效性，但区分性不足，不应当成稳定锚点
+- `others`
+  - 主行为：`替换 Source`
+  - 次行为：`轻微收缩`
+  - 推荐动作：`inspect_and_rebuild_source`
+  - 说明：这是 source 的兜底异常状态，应先检查现有 source 是否仍有保留价值
 
 ### Sink 映射
 
@@ -128,34 +128,23 @@
 - `only_fixed`
   - 主行为：`替换 Sink`
   - 推荐动作：`replace_reversed_sink`
+- `off_target`
+  - 主行为：`替换 Sink`
+  - 推荐动作：`replace_off_target_sink`
+  - 说明：sink 有结果但不贴近目标危险操作，应直接替换原 sink 主体
 - `weak_but_present`
-  - 如果 `aligned_methods = 0`
-    - 主行为：`替换 Sink`
-    - 推荐动作：`replace_off_target_sink`
-    - 说明：命中了文件但没命中目标方法时，也归入这一类
-  - 如果 `aligned_methods > 0`
-    - 主行为：`保留`
-    - 次行为：`轻微收缩`
-    - 推荐动作：`keep_sink_stable`
-- `good_anchor`
-  - 主行为：`保留`
-  - 推荐动作：`keep_sink_stable`
+  - 主行为：`轻微收缩`
+  - 次行为：`保留`
+  - 推荐动作：`lightly_narrow_sink`
+  - 说明：sink 有部分有效性，但区分性不足，不应当成稳定锚点
+- `others`
+  - 主行为：`替换 Sink`
+  - 次行为：`轻微收缩`
+  - 推荐动作：`inspect_and_rebuild_sink`
+  - 说明：这是 sink 的兜底异常状态，应先检查现有 sink 是否仍有保留价值
 
 ### Barrier 映射
 
-- `absent`
-  - 主行为：`专化 Barrier 到修复逻辑`
-  - 推荐动作：`add_repair_side_barrier`
-  - 说明：如果漏洞语义确实需要修复侧保护逻辑，而 barrier 完全不存在，就应补 barrier
-- `repair_only`
-  - 主行为：`专化 Barrier 到修复逻辑`
-  - 推荐动作：`specialize_existing_barrier`
-  - 说明：方向是对的，不要删，应该保留并贴近 fixed-side validation
-- `useful_repair_signal`
-  - 主行为：`专化 Barrier 到修复逻辑`
-  - 次行为：`轻微收缩 Barrier`
-  - 推荐动作：`specialize_existing_barrier`
-  - 说明：barrier 是正向修复信号，但可能还不够具体
 - `overblocking_suspect`
   - 主行为：`弱化 Barrier`
   - 推荐动作：`narrow_or_replace_barrier`
@@ -165,6 +154,15 @@
   - 次行为：`弱化 Barrier`
   - 推荐动作：`specialize_or_lightly_narrow_barrier`
   - 说明：如果 barrier 只是 shared filter，就应把它往 fixed-side 修复逻辑上专化；若专化无从下手，再考虑弱化
+- `compile_failed`
+  - 主行为：`替换或重建 Barrier`
+  - 推荐动作：`replace_or_rebuild_barrier`
+  - 说明：barrier 自身结构不稳定，应先修结构再判断语义
+- `others`
+  - 主行为：`专化 Barrier 到修复逻辑`
+  - 次行为：`弱化 Barrier`
+  - 推荐动作：`inspect_and_adjust_barrier`
+  - 说明：这是 barrier 的兜底异常状态，应围绕修复侧校验逻辑人工判定去留
 
 ### Flow 映射
 
@@ -180,11 +178,6 @@
   - 主行为：`补桥`
   - 推荐动作：`add_new_flow_bridge`
   - 说明：source/sink 已存在但没有 bridge facts
-- `useful_bridge`
-  - 主行为：`保留`
-  - 次行为：`轻微补桥`
-  - 推荐动作：`keep_flow_stable`
-  - 说明：flow 已经提供了有价值传播边，不应大改
 - `noisy_bridge`
   - 主行为：`降噪`
   - 推荐动作：`narrow_existing_flow`
@@ -194,41 +187,43 @@
   - 次行为：`补桥`
   - 推荐动作：`narrow_then_add_flow_if_needed`
   - 说明：先看是否因为太宽导致弱信号；若不是，再考虑增加 target-adjacent bridge
+- `others`
+  - 主行为：`降噪`
+  - 次行为：`补桥`
+  - 推荐动作：`inspect_and_adjust_flow`
+  - 说明：这是 flow 的兜底异常状态，应先检查现有传播边是否仍有解释力
 
-## 完整 Query 的修复建议优先级
+## 非问题状态说明
 
-当多个组件同时有问题时，不建议只保留一个建议，而应按优先级组合多个组件建议。
+下面这些状态不会进入 `problem_components`，因此不会进入后续修复建议和专用 prompt 的主路径：
 
-推荐顺序如下：
-
-1. `source`
-   - 当 `source_off_target`、`source_missing`、`source_empty` 时，优先级最高
-2. `sink`
-   - 当 `sink_off_target`、`sink_missing`、`sink_empty` 时，优先级与 source 同级
-3. `barrier`
-   - 当 `overblocking_suspect` 时，优先级提升到和 source/sink 接近
-4. `flow`
-   - 当 `flow_missing` 时，优先级高于一般的 barrier/non-discriminative 情况
-
-一个推荐的总体规则是：
-
-- 如果 `source/sink` 有明显对齐问题，优先修 `source/sink`
-- 如果 `source/sink` 基本存在，但 query 仍 `0/0`，再看 `flow`
-- 如果 `barrier` 是 `overblocking_suspect`，把 barrier 建议一并加入 prompt
-- 如果 `barrier` 只是 `non_discriminative`，通常放在 source/sink/flow 后面
+- `source.good_anchor`
+  - 表示 source 已经是较好的漏洞侧锚点，应默认保持稳定。
+- `sink.good_anchor`
+  - 表示 sink 已经是较好的危险点锚点，应默认保持稳定。
+- `barrier.absent`
+  - 表示 barrier 当前没有形成有效信号；按现有 `problem_components` 规则，它不直接进入自动修复主路径。
+- `barrier.repair_only`
+  - 表示 barrier 只在修复侧出现，这是正向修复侧信号，应默认保留。
+- `barrier.useful_repair_signal`
+  - 表示 barrier 在修复侧更强，这是正向修复侧信号，应默认保留。
+- `flow.useful_bridge`
+  - 表示 flow 已经提供有用的漏洞侧桥接证据，应默认保持稳定。
+- `flow.likely_not_needed`
+  - 表示当前 query 不需要把 flow 当成主要修复方向，应默认不动。
 
 ## 推荐的自动修复建议输出
 
-后续系统可以把 `probe_evaluation` 的结果转成一个简单的“修复建议结果”，例如：
+后续系统应先从 `problem_components` 读取需要处理的组件，再回到 `components[role]` 读取完整字段内容，最后生成一个简单的“修复建议结果”，例如：
 
 ```text
 source:
-- status: source_off_target
+- status: off_target
 - selected_behavior: 替换 Source
 - recommended_action: replace_off_target_source
 
 sink:
-- status: sink_off_target
+- status: off_target
 - selected_behavior: 替换 Sink
 - recommended_action: replace_off_target_sink
 
@@ -243,11 +238,11 @@ flow:
 - recommended_action: narrow_existing_flow
 ```
 
-然后 prompt builder 再按优先级把这些组件建议拼起来。
+然后 prompt builder 再把这些组件建议组合起来。
 
 ## 从 Probe 评估结果直接选择专用提示词
 
-除了行为选择之外，每个组件的评估结果还应对应一套专用提示词。
+除了行为选择之外，每个进入 `problem_components` 的组件还应对应一套专用提示词。
 
 原因是：
 
@@ -272,7 +267,7 @@ flow:
 <source|sink|barrier|flow>
 
 [Status]
-<probe status>
+<verdict.status>
 
 [Problem]
 <summary generated from probe evaluation>
@@ -281,163 +276,325 @@ flow:
 <selected behavior name>
 
 [Supporting Facts]
-<aligned files/methods, hit counts, coverage, vuln/fixed counts>
+<来自 components[role] 的已有字段，如 vuln/fixed counts、aligned files/methods、coverage>
 
 [Repair Prompt]
-Only modify <component-specific scope>.
+Focus this prompt on <component-specific scope>.
 <component-specific guidance from the current status>.
 Do not rewrite the whole query.
-Do not modify unrelated components unless explicitly requested.
+If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on the current component.
 ```
 
 ## 组件状态到专用提示词的映射
 
+这一节只保留会进入 `problem_components` 的状态，也就是后续会真正参与修复 prompt 构建的问题状态。
+
 ### Source 专用提示词
+
+- `compile_failed`
+
+```text
+The current source component does not compile independently.
+Rebuild or simplify the source definition first, then keep only source logic that is clearly tied to target-adjacent entry points.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on source.
+```
+
+中文版本：
+
+```text
+当前 source 组件无法独立编译。
+先重建或简化 source 定义，只保留那些与目标附近入口点明确相关的 source 逻辑。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 source。
+```
 
 - `missing_component`
 
 ```text
-Only modify source-related code.
 The query does not define an effective source component.
 Add one new source condition that captures a target-adjacent entry point.
 Prefer parameters, request values, configuration values, or patch-adjacent inputs near target files and target methods.
-Do not modify sink, barrier, flow, or the final query structure.
+Keep the overall query structure stable. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on source.
+```
+
+中文版本：
+
+```text
+当前 query 没有定义有效的 source 组件。
+新增一个 source 条件，用来捕获靠近目标位置的入口点。
+优先考虑靠近目标文件、目标方法或补丁相关代码的参数、请求值、配置值等输入。
+保持 query 的整体结构稳定。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 source。
 ```
 
 - `empty`
 
 ```text
-Only modify source-related code.
 The current source probe returns no matches on either vulnerable or fixed versions.
 Expand the source locally by adding one new source branch.
 Prefer entry points that are close to target files, target methods, or patch-related code.
-Do not modify sink, barrier, flow, or rewrite the whole query.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on source.
+```
+
+中文版本：
+
+```text
+当前 source probe 在漏洞版本和修复版本上都没有结果。
+通过新增一个 source 分支，在局部扩张 source。
+优先选择靠近目标文件、目标方法或补丁相关代码的入口点。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 source。
 ```
 
 - `only_fixed`
 
 ```text
-Only modify source-related code.
 The current source modeling appears reversed because it only matches the fixed version.
 Replace the current source so that it captures vulnerable-side entry points instead of fixed-side-only inputs.
 Prefer target-adjacent source logic over broad utility-like sources.
-Do not modify sink, barrier, flow, or rewrite the whole query.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on source.
 ```
 
-- `weak_but_present` with `aligned_methods = 0`
+中文版本：
 
 ```text
-Only modify source-related code.
-The source probe has matches, but none align with target files or target methods.
-Treat this as off-target source modeling.
+当前 source 建模方向反了，因为它只命中了修复版本。
+替换当前 source，使它捕获漏洞侧入口，而不是只在修复侧出现的输入。
+优先使用贴近目标位置的 source 逻辑，而不是宽泛的通用型 source。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 source。
+```
+
+- `off_target`
+
+```text
+The source probe has matches, but it does not behave like a target-aligned vulnerable-side source.
+Treat this as off-target source modeling and replace the current source body first.
 Prefer replacing broad utility-like sources with target-adjacent entry points.
-Do not modify sink, barrier, flow, or rewrite the whole query.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on source.
 ```
 
-- `good_anchor`
+中文版本：
 
 ```text
-Do not prioritize source repair.
-The source component already aligns with vulnerable-side target methods or otherwise behaves like a good anchor.
-Keep source logic stable unless another change requires a very small local adjustment.
+当前 source probe 虽然有结果，但它并不像一个与目标对齐的漏洞侧 source。
+把这种情况视为 source 偏靶建模，优先替换当前 source 主体。
+优先用贴近目标位置的入口点替换宽泛的通用型 source。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 source。
+```
+
+- `weak_but_present`
+
+```text
+The source component has some evidence, but it is not discriminative enough to act as a stable anchor.
+Keep the current source shape if it is locally useful, but lightly narrow broad branches and remove obviously generic source conditions.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on source.
+```
+
+中文版本：
+
+```text
+当前 source 组件有一定证据，但区分性不足，不能作为稳定锚点。
+如果当前 source 形态在局部仍然有用，可以暂时保留；但应轻微收缩过宽的分支，并去掉明显过于泛化的 source 条件。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 source。
+```
+
+- `others`
+
+```text
+The source component falls into an uncategorized abnormal state.
+Inspect the existing source definition using the current component fields and either rebuild it or lightly narrow it, but do not expand scope without evidence from target-adjacent facts.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on source.
+```
+
+中文版本：
+
+```text
+当前 source 组件落入未分类的异常状态。
+结合当前组件字段检查现有 source 定义，并决定是重建它还是轻微收缩它；如果没有目标附近事实支撑，不要盲目扩张范围。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 source。
 ```
 
 ### Sink 专用提示词
 
+- `compile_failed`
+
+```text
+The current sink component does not compile independently.
+Rebuild or simplify the sink definition first, then keep only sink logic that is clearly tied to vulnerability-relevant dangerous operations.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on sink.
+```
+
+中文版本：
+
+```text
+当前 sink 组件无法独立编译。
+先重建或简化 sink 定义，只保留那些与漏洞相关危险操作明确相关的 sink 逻辑。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 sink。
+```
+
 - `missing_component`
 
 ```text
-Only modify sink-related code.
 The query does not define an effective sink component.
 Add one new sink condition that captures a vulnerability-relevant dangerous operation near target files or target methods.
-Do not modify source, barrier, flow, or the final query structure.
+Keep the overall query structure stable. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on sink.
+```
+
+中文版本：
+
+```text
+当前 query 没有定义有效的 sink 组件。
+新增一个 sink 条件，用来捕获靠近目标文件或目标方法的漏洞相关危险操作。
+保持 query 的整体结构稳定。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 sink。
 ```
 
 - `empty`
 
 ```text
-Only modify sink-related code.
 The current sink probe returns no matches on either vulnerable or fixed versions.
 Expand the sink locally by adding one new sink branch that better reflects the dangerous operation in the patch context.
-Do not modify source, barrier, flow, or rewrite the whole query.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on sink.
+```
+
+中文版本：
+
+```text
+当前 sink probe 在漏洞版本和修复版本上都没有结果。
+通过新增一个 sink 分支，在局部扩张 sink，使其更贴近补丁语境中的危险操作。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 sink。
 ```
 
 - `only_fixed`
 
 ```text
-Only modify sink-related code.
 The current sink modeling appears reversed because it only matches the fixed version.
 Replace the sink so that it captures vulnerable-side dangerous operations rather than fixed-side-only behavior.
-Do not modify source, barrier, flow, or rewrite the whole query.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on sink.
 ```
 
-- `weak_but_present` with `aligned_methods = 0`
+中文版本：
 
 ```text
-Only modify sink-related code.
-The sink probe has matches, but it does not align with target methods.
-Treat this as off-target sink modeling.
+当前 sink 建模方向反了，因为它只命中了修复版本。
+替换当前 sink，使它捕获漏洞侧危险操作，而不是只在修复侧出现的行为。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 sink。
+```
+
+- `off_target`
+
+```text
+The sink probe has matches, but it does not behave like a target-aligned dangerous operation.
+Treat this as off-target sink modeling and replace the current sink body first.
 Prefer replacing broad sink logic with target-adjacent dangerous operations.
-Do not modify source, barrier, flow, or rewrite the whole query.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on sink.
 ```
 
-- `good_anchor`
+中文版本：
 
 ```text
-Do not prioritize sink repair.
-The sink component already behaves like a useful anchor near the intended dangerous operation.
-Keep sink logic stable unless another local change requires a very small adjustment.
+当前 sink probe 虽然有结果，但它并不像一个与目标对齐的危险操作。
+把这种情况视为 sink 偏靶建模，优先替换当前 sink 主体。
+优先用贴近目标位置的危险操作替换宽泛的 sink 逻辑。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 sink。
+```
+
+- `weak_but_present`
+
+```text
+The sink component has some evidence, but it is not discriminative enough to act as a stable anchor.
+Keep the current sink shape if it is locally useful, but lightly narrow broad branches and remove obviously generic sink conditions.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on sink.
+```
+
+中文版本：
+
+```text
+当前 sink 组件有一定证据，但区分性不足，不能作为稳定锚点。
+如果当前 sink 形态在局部仍然有用，可以暂时保留；但应轻微收缩过宽的分支，并去掉明显过于泛化的 sink 条件。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 sink。
+```
+
+- `others`
+
+```text
+The sink component falls into an uncategorized abnormal state.
+Inspect the existing sink definition using the current component fields and either rebuild it or lightly narrow it, but do not expand scope without evidence from target-adjacent facts.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on sink.
+```
+
+中文版本：
+
+```text
+当前 sink 组件落入未分类的异常状态。
+结合当前组件字段检查现有 sink 定义，并决定是重建它还是轻微收缩它；如果没有目标附近事实支撑，不要盲目扩张范围。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 sink。
 ```
 
 ### Barrier 专用提示词
 
-- `absent`
+- `compile_failed`
 
 ```text
-Only modify barrier-related code.
-The query currently has no effective barrier behavior.
-Add a local barrier condition only if the patch introduces validation, sanitization, normalization, or fixed-side guard logic that should suppress paths after repair.
-Do not modify source, sink, flow, or rewrite the whole query.
+The current barrier component does not compile independently.
+Rebuild or simplify the barrier definition first, then decide whether it should preserve repair-side validation logic or be narrowed.
+If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on barrier.
 ```
 
-- `repair_only`
+中文版本：
 
 ```text
-Only modify barrier-related code.
-The barrier appears only on the fixed side, which is a strong repair-side signal.
-Keep the barrier and make it more explicit around fixed-side validation, sanitization, normalization, or whitelist logic.
-Do not weaken the barrier unless there is clear evidence that it suppresses vulnerable paths.
-Do not modify source, sink, or flow.
-```
-
-- `useful_repair_signal`
-
-```text
-Only modify barrier-related code.
-The barrier is stronger in the fixed version than in the vulnerable version, which suggests useful repair-side protection logic.
-Preserve the barrier, but specialize it toward fixed-side validation helpers instead of generic shared conditions.
-Do not broadly delete barrier logic.
-Do not modify source, sink, or flow.
+当前 barrier 组件无法独立编译。
+先重建或简化 barrier 定义，然后再判断它应当保留修复侧校验逻辑，还是需要收缩。
+如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 barrier。
 ```
 
 - `overblocking_suspect`
 
 ```text
-Only modify barrier-related code.
 The barrier may be too broad and may suppress vulnerable paths that should remain reachable.
 Weaken the barrier locally by adding stronger guards or replacing generic barrier conditions with more specific fixed-side validation logic.
 Do not remove all barrier logic unless it is clearly unsupported.
-Do not modify source, sink, or flow.
+If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on barrier.
+```
+
+中文版本：
+
+```text
+当前 barrier 可能过宽，并且可能压掉了本应保持可达的漏洞路径。
+通过增加更强的守卫条件，或用更具体的修复侧校验逻辑替换泛化的 barrier 条件，来局部弱化 barrier。
+除非有明确证据，否则不要删除全部 barrier 逻辑。
+如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 barrier。
 ```
 
 - `non_discriminative`
 
 ```text
-Only modify barrier-related code.
 The barrier matches both vulnerable and fixed versions with weak discrimination.
 Do not treat it as a main detection signal.
 Try to specialize the barrier toward fixed-side validation or sanitization logic; if that is not possible, gently narrow generic barrier conditions.
-Do not modify source, sink, or flow.
+If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on barrier.
+```
+
+中文版本：
+
+```text
+当前 barrier 在漏洞版本和修复版本上都命中了，但区分性较弱。
+不要把它当成主要检测信号。
+尝试把 barrier 专化到修复侧的校验或净化逻辑；如果做不到，再轻微收缩泛化的 barrier 条件。
+如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 barrier。
+```
+
+- `others`
+
+```text
+The barrier component falls into an uncategorized abnormal state.
+Inspect whether the current barrier is tied to fixed-side validation or is broadly suppressing paths; then either specialize it toward repair logic or lightly narrow it.
+If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on barrier.
+```
+
+中文版本：
+
+```text
+当前 barrier 组件落入未分类的异常状态。
+检查现有 barrier 是不是与修复侧校验逻辑相关，还是在宽泛地压制路径；然后决定是把它专化到修复逻辑，还是轻微收缩它。
+如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 barrier。
 ```
 
 ### Flow 专用提示词
@@ -445,62 +602,108 @@ Do not modify source, sink, or flow.
 - `missing_component`
 
 ```text
-Only modify flow-related code.
 The query has no effective additional flow-step modeling.
 Add one new propagation step that helps connect the current source region to the current sink region.
 Prefer target-adjacent propagation edges over generic utility flows.
-Do not modify source, sink, barrier, or rewrite the whole query.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on flow.
+```
+
+中文版本：
+
+```text
+当前 query 没有有效的 additional flow-step 建模。
+新增一个传播步骤，用来连接当前 source 区域和当前 sink 区域。
+优先选择贴近目标位置的传播边，而不是泛化的通用传播流。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 flow。
 ```
 
 - `empty`
 
 ```text
-Only modify flow-related code.
 The flow probe returns no bridge facts on either vulnerable or fixed versions.
 Add one new local propagation step inside isAdditionalFlowStep or a closely related helper predicate.
 Prefer propagation edges that appear near target files, target methods, or patch-relevant helper calls.
-Do not modify source, sink, barrier, or rewrite the whole query.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on flow.
+```
+
+中文版本：
+
+```text
+当前 flow probe 在漏洞版本和修复版本上都没有桥接事实。
+在 `isAdditionalFlowStep` 或与之紧密相关的 helper predicate 中新增一个局部传播步骤。
+优先选择靠近目标文件、目标方法或补丁相关 helper 调用的传播边。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 flow。
 ```
 
 - `compile_failed`
 
 ```text
-Only modify flow-related code.
 The additional flow-step logic does not compile independently.
 First rebuild or simplify the current flow predicate structure, then keep only the most target-relevant propagation edges.
-Do not modify source, sink, barrier, or rewrite the whole query.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on flow.
+```
+
+中文版本：
+
+```text
+当前 additional flow-step 逻辑无法独立编译。
+先重建或简化当前 flow predicate 结构，只保留那些与目标最相关的传播边。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 flow。
 ```
 
 - `noisy_bridge`
 
 ```text
-Only modify flow-related code.
 The current additional flow-step logic produces many shared edges on both vulnerable and fixed versions.
 Treat this as noisy bridge modeling.
 Narrow the flow by adding stronger type, receiver, method-name, or argument-position constraints, and keep only target-adjacent propagation edges.
-Do not modify source, sink, barrier, or rewrite the whole query.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on flow.
+```
+
+中文版本：
+
+```text
+当前 additional flow-step 逻辑在漏洞版本和修复版本上都产生了大量共享传播边。
+把这种情况视为噪声较大的 bridge 建模。
+通过增加更强的类型、接收者、方法名或参数位置约束来收缩 flow，只保留贴近目标位置的传播边。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 flow。
 ```
 
 - `weak_bridge`
 
 ```text
-Only modify flow-related code.
 Some bridge evidence exists, but it is not yet specific enough to explain the intended vulnerability path.
 First try to denoise existing flow edges; if needed, add one new target-adjacent propagation step.
-Do not modify source, sink, barrier, or rewrite the whole query.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on flow.
 ```
 
-- `useful_bridge`
+中文版本：
 
 ```text
-Do not prioritize large flow changes.
-The current additional flow-step logic already provides useful vulnerable-side bridge evidence.
-Keep the existing flow mostly stable and only make very small local adjustments if they improve target-adjacent connectivity.
+当前已经有一些 bridge 证据，但还不够具体，无法解释目标漏洞路径。
+先尝试给现有 flow 边降噪；如果仍然不足，再新增一个贴近目标位置的传播步骤。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 flow。
+```
+
+- `others`
+
+```text
+The flow component falls into an uncategorized abnormal state.
+Inspect whether the current additional flow-step logic is too broad or too weak, then either denoise it or add one small target-adjacent bridge if justified by the component facts.
+Do not rewrite the whole query. If other problem components are also selected, coordinate those edits separately, but keep this prompt focused on flow.
+```
+
+中文版本：
+
+```text
+当前 flow 组件落入未分类的异常状态。
+检查现有 additional flow-step 逻辑是过宽还是过弱；然后根据组件事实决定是给它降噪，还是补一个小的、贴近目标位置的 bridge。
+不要重写整份 query。如果还有其他问题组件也被选中，可以协同修改它们，但本条提示词应聚焦于 flow。
 ```
 
 ## 推荐的自动提示词选择输出
 
-后续系统可以把行为选择结果继续扩展成一个“组件级提示词选择结果”，例如：
+后续系统可以把行为选择结果继续扩展成一个“组件级提示词选择结果”，这个结果只针对 `problem_components` 中出现的组件，例如：
 
 ```text
 source:
@@ -510,7 +713,7 @@ source:
 - selected_prompt: Source only_fixed prompt
 
 sink:
-- status: weak_but_present (aligned_methods = 0)
+- status: off_target
 - selected_behavior: 替换 Sink
 - recommended_action: replace_off_target_sink
 - selected_prompt: Sink off-target prompt
@@ -534,43 +737,6 @@ flow:
 - 修复行为名称
 - 事实依据
 - 对应状态的专用提示词
-
-## Prompt 中每个组件建议应如何表达
-
-每个组件在 prompt 里建议固定为如下结构：
-
-```text
-[Component]
-source
-
-[Problem]
-Source probe has many matches, but none align with target files or target methods.
-
-[Repair Behavior]
-Replace the source locally.
-
-[Supporting Facts]
-- vuln_aligned_methods: 0
-- fixed_aligned_methods: 0
-- vuln_num_results: 105
-- fixed_num_results: 105
-
-[Allowed Edits]
-- edit source class definitions
-- edit isSource predicate
-- edit source helper predicates
-
-[Preferred Actions]
-- replace broad utility sources with target-adjacent entry points
-- add type constraints if a full replacement is not yet justified
-
-[Forbidden Actions]
-- do not modify sink
-- do not modify barrier
-- do not rewrite the whole query
-```
-
-其他组件同理，只替换 `Problem`、`Repair Behavior`、`Supporting Facts`、`Allowed Edits`、`Preferred Actions`。
 
 ## 推荐的整体落地流程
 
