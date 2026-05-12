@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import os
@@ -736,13 +737,25 @@ def extract_and_compile_components(
             generation_mode=generation_mode,
             query_kind=query_kind,
         )
-        if compile_components:
-            success, return_code, stdout, stderr = compile_query(component_path, codeql_path)
-            generated.success = success
-            generated.return_code = return_code
-            generated.stdout = stdout
-            generated.stderr = stderr
         generated_components.append(generated)
+
+    if compile_components and generated_components:
+        max_workers = min(4, len(generated_components))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_component = {
+                executor.submit(compile_query, Path(component.output_path), codeql_path): component
+                for component in generated_components
+            }
+            for future in as_completed(future_to_component):
+                component = future_to_component[future]
+                try:
+                    success, return_code, stdout, stderr = future.result()
+                except Exception as exc:  # pragma: no cover - subprocess wrapper should not fail
+                    success, return_code, stdout, stderr = False, -1, "", str(exc)
+                component.success = success
+                component.return_code = return_code
+                component.stdout = stdout
+                component.stderr = stderr
 
     report: dict[str, Any] = {
         "query_label": query_label,

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 try:
-    from .component_repair_prompts import ROLE_TO_PREDICATE, get_prompt_spec
+    from .component_repair_prompts import get_prompt_spec
 except Exception:
-    from component_repair_prompts import ROLE_TO_PREDICATE, get_prompt_spec
+    from component_repair_prompts import get_prompt_spec
 
 
 DEFAULT_COMPONENT_ORDER = ("source", "sink", "barrier", "flow")
@@ -30,59 +29,10 @@ PROBLEM_STATUS_SET = {
 }
 
 
-@dataclass
-class SelectedComponent:
-    role: str
-    status: str
-    repair_behavior: str
-    recommended_action: str
-    prompt_title: str
-    prompt_text: str
-    prompt_text_en: str
-    prompt_text_zh: str
-    target_predicate: str | None
-    problem_summary: str
-    confidence: float
-    supporting_facts: dict[str, Any]
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-PROBLEM_SUMMARY_MAP: dict[str, dict[str, str]] = {
-    "source": {
-        "missing_component": "Source 组件缺失。",
-        "compile_failed": "Source 组件无法独立编译。",
-        "empty": "Source 在漏洞版和修复版都没有结果。",
-        "only_fixed": "Source 只在修复版出现，建模方向可能反了。",
-        "off_target": "Source 有结果，但没有落在目标方法上，说明偏离漏洞入口。",
-        "weak_but_present": "Source 存在，但区分性不足，不能作为稳定锚点。",
-        "others": "Source 落入未分类异常状态，需要结合运行事实进一步判断。",
-    },
-    "sink": {
-        "missing_component": "Sink 组件缺失。",
-        "compile_failed": "Sink 组件无法独立编译。",
-        "empty": "Sink 在漏洞版和修复版都没有结果。",
-        "only_fixed": "Sink 只在修复版出现，危险点建模方向可能反了。",
-        "off_target": "Sink 有结果，但没有落在目标危险方法上。",
-        "weak_but_present": "Sink 存在，但区分性不足，不能作为稳定锚点。",
-        "others": "Sink 落入未分类异常状态，需要结合运行事实进一步判断。",
-    },
-    "barrier": {
-        "compile_failed": "Barrier 组件无法独立编译。",
-        "overblocking_suspect": "Barrier 可能过强，压制了本应存在的漏洞路径。",
-        "non_discriminative": "Barrier 在两侧都存在，但区分性不足。",
-        "others": "Barrier 落入未分类异常状态，需要结合修复侧逻辑进一步判断。",
-    },
-    "flow": {
-        "missing_component": "Flow 组件缺失，当前 query 缺少额外桥接步骤。",
-        "compile_failed": "Flow 组件无法独立编译。",
-        "empty": "Flow 在两侧都没有桥接事实。",
-        "noisy_bridge": "Flow 两侧边很多且数量接近，桥接边噪声较大。",
-        "weak_bridge": "Flow 有一定桥接证据，但还不够明确。",
-        "others": "Flow 落入未分类异常状态，需要结合传播边事实进一步判断。",
-    },
-}
+EXCLUDED_COMPONENT_FIELDS = {"generation_mode", "source_predicate", "probe_path"}
+EXCLUDED_RUN_FIELDS = {"sarif_path"}
+TRUNCATED_LIST_FIELDS = {"hit_files", "hit_methods"}
+MAX_LIST_ITEMS = 5
 
 
 def _ordered_problem_components(report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -108,20 +58,56 @@ def _fallback_problem_components(report: dict[str, Any]) -> list[dict[str, Any]]
     return items
 
 
+def _trim_value(key: str, value: Any) -> Any:
+    if key in TRUNCATED_LIST_FIELDS and isinstance(value, list):
+        return value[:MAX_LIST_ITEMS]
+    return value
+
+
+def _trim_run_fields(run: dict[str, Any]) -> dict[str, Any]:
+    trimmed: dict[str, Any] = {}
+    for side, side_report in run.items():
+        if not isinstance(side_report, dict):
+            trimmed[side] = side_report
+            continue
+        trimmed_side: dict[str, Any] = {}
+        for key, value in side_report.items():
+            if key in EXCLUDED_RUN_FIELDS:
+                continue
+            trimmed_side[key] = _trim_value(key, value)
+        trimmed[side] = trimmed_side
+    return trimmed
+
+
 def supporting_facts_for_component(component: dict[str, Any]) -> dict[str, Any]:
+    facts: dict[str, Any] = {}
+    for key, value in component.items():
+        if key in EXCLUDED_COMPONENT_FIELDS:
+            continue
+        if key == "run" and isinstance(value, dict):
+            facts[key] = _trim_run_fields(value)
+            continue
+        facts[key] = _trim_value(key, value)
+    return facts
+
+
+def build_repair_prompt(role: str, status: str) -> dict[str, str] | None:
+    try:
+        spec = get_prompt_spec(role, status)
+    except KeyError:
+        return None
     return {
-        "present_in_query": component.get("present_in_query"),
-        "probe_path": component.get("probe_path"),
-        "compile_success": component.get("compile_success"),
-        "compile_error": component.get("compile_error"),
-        "generation_mode": component.get("generation_mode"),
-        "predicate_name": component.get("source_predicate"),
-        "run": component.get("run", {}),
+        "en": spec.prompt_text_en,
+        "zh": spec.prompt_text_zh,
     }
 
 
-def summarize_problem(role: str, status: str) -> str:
-    return PROBLEM_SUMMARY_MAP.get(role, {}).get(status, f"{role} 组件当前状态为 {status}。")
+def build_component_feedback(role: str, status: str, component: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "Component": role,
+        "Repair Prompt": build_repair_prompt(role, status),
+        "Supporting Facts": supporting_facts_for_component(component),
+    }
 
 
 def select_components(report: dict[str, Any]) -> dict[str, Any]:
@@ -136,36 +122,23 @@ def select_components(report: dict[str, Any]) -> dict[str, Any]:
         "target_context": report.get("target_context", {}),
         "component_order": selected_roles,
         "problem_components": problem_components,
-        "components": {},
+        "selected_components": [],
     }
 
     for item in problem_components:
         role = item["role"]
         status = item["status"]
         component = report["components"][role]
-        spec = get_prompt_spec(role, status)
-        selected = SelectedComponent(
-            role=role,
-            status=status,
-            repair_behavior=spec.repair_behavior,
-            recommended_action=spec.recommended_action,
-            prompt_title=spec.prompt_title,
-            prompt_text=spec.prompt_text_en,
-            prompt_text_en=spec.prompt_text_en,
-            prompt_text_zh=spec.prompt_text_zh,
-            target_predicate=spec.target_predicate or ROLE_TO_PREDICATE.get(role),
-            problem_summary=summarize_problem(role, status),
-            confidence=float(item.get("confidence", 0.0) or 0.0),
-            supporting_facts=supporting_facts_for_component(component),
+        output["selected_components"].append(
+            build_component_feedback(role, status, component)
         )
-        output["components"][role] = selected.to_dict()
 
     return output
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Select component repair prompts and action suggestions from probe_evaluation.json."
+        description="Select component repair prompts and supporting facts from probe_evaluation.json."
     )
     parser.add_argument("--probe-eval", type=Path, required=True)
     parser.add_argument("--output-path", type=Path, required=True)

@@ -8,15 +8,15 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .repair_template_selector import DEFAULT_COMPONENT_ORDER, select_components
+    from .repair_template_selector import select_components
 except Exception:
-    from repair_template_selector import DEFAULT_COMPONENT_ORDER, select_components
+    from repair_template_selector import select_components
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Build component-level repair prompts and action suggestions from a probe "
+            "Build component-level repair prompts and supporting facts from a probe "
             "evaluation report and a full CodeQL query."
         )
     )
@@ -31,21 +31,28 @@ def _json_dumps(data: Any, pretty: bool) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2 if pretty else None)
 
 
+def _selected_component_map(selection: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        item["Component"]: item
+        for item in selection.get("selected_components", [])
+        if isinstance(item, dict) and item.get("Component")
+    }
+
+
 def build_repair_plan(selection: dict[str, Any]) -> dict[str, Any]:
     components: list[dict[str, Any]] = []
-    for role in selection.get("component_order", []):
-        component = selection["components"][role]
+    selected_component_map = _selected_component_map(selection)
+    for item in selection.get("problem_components", []):
+        role = item["role"]
+        feedback = selected_component_map.get(role)
+        if feedback is None:
+            continue
         components.append(
             {
                 "role": role,
-                "status": component["status"],
-                "repair_behavior": component["repair_behavior"],
-                "recommended_action": component["recommended_action"],
-                "target_predicate": component["target_predicate"],
-                "problem_summary": component["problem_summary"],
-                "prompt_text_en": component.get("prompt_text_en", component.get("prompt_text")),
-                "prompt_text_zh": component.get("prompt_text_zh"),
-                "supporting_facts": component["supporting_facts"],
+                "status": item["status"],
+                "confidence": float(item.get("confidence", 0.0) or 0.0),
+                "component_feedback": feedback,
             }
         )
 
@@ -70,26 +77,27 @@ def render_selected_prompts(selection: dict[str, Any]) -> str:
         lines.extend(["- No problem components were selected.", ""])
         return "\n".join(lines).rstrip() + "\n"
 
+    selected_component_map = _selected_component_map(selection)
+    problem_component_map = {
+        item["role"]: item for item in selection.get("problem_components", [])
+    }
     for role in selection["component_order"]:
-        component = selection["components"][role]
+        component = selected_component_map.get(role)
+        problem = problem_component_map.get(role, {})
+        if component is None:
+            continue
+        prompt = component.get("Repair Prompt") or {}
         lines.extend(
             [
                 f"## {role}",
                 "",
-                f"- Status: `{component['status']}`",
-                f"- Repair behavior: `{component['repair_behavior']}`",
-                f"- Recommended action: `{component['recommended_action']}`",
-                f"- Predicate: `{component['target_predicate'] or 'n/a'}`",
-                f"- Confidence: `{component['confidence']}`",
-                "",
-                "### Problem",
-                "",
-                component["problem_summary"],
+                f"- Status: `{problem.get('status', 'unknown')}`",
+                f"- Confidence: `{problem.get('confidence', 0.0)}`",
                 "",
                 "### Facts",
                 "",
                 "```json",
-                json.dumps(component["supporting_facts"], ensure_ascii=False, indent=2),
+                json.dumps(component["Supporting Facts"], ensure_ascii=False, indent=2),
                 "```",
                 "",
                 "### Prompt",
@@ -97,13 +105,13 @@ def render_selected_prompts(selection: dict[str, Any]) -> str:
                 "#### English",
                 "",
                 "```text",
-                component.get("prompt_text_en", component["prompt_text"]),
+                prompt.get("en", ""),
                 "```",
                 "",
                 "#### 中文",
                 "",
                 "```text",
-                component.get("prompt_text_zh", ""),
+                prompt.get("zh", ""),
                 "```",
                 "",
             ]
@@ -126,28 +134,39 @@ def render_repair_suggestions(selection: dict[str, Any], query_path: Path) -> st
         lines.extend(["- No problem components were selected.", ""])
         return "\n".join(lines).rstrip() + "\n"
 
+    selected_component_map = _selected_component_map(selection)
+    problem_component_map = {
+        item["role"]: item for item in selection.get("problem_components", [])
+    }
     for role in selection["component_order"]:
-        component = selection["components"][role]
+        component = selected_component_map.get(role)
+        problem = problem_component_map.get(role, {})
+        if component is None:
+            continue
+        prompt = component.get("Repair Prompt") or {}
         lines.extend(
             [
                 f"### {role}",
                 "",
-                f"- Status: `{component['status']}`",
-                f"- Repair behavior: `{component['repair_behavior']}`",
-                f"- Recommended action: `{component['recommended_action']}`",
-                f"- Target predicate: `{component['target_predicate'] or 'n/a'}`",
-                f"- Problem: {component['problem_summary']}",
+                f"- Status: `{problem.get('status', 'unknown')}`",
+                f"- Confidence: `{problem.get('confidence', 0.0)}`",
                 "",
                 "#### English",
                 "",
                 "```text",
-                component.get("prompt_text_en", component["prompt_text"]),
+                prompt.get("en", ""),
                 "```",
                 "",
                 "#### 中文",
                 "",
                 "```text",
-                component.get("prompt_text_zh", ""),
+                prompt.get("zh", ""),
+                "```",
+                "",
+                "#### Supporting Facts",
+                "",
+                "```json",
+                json.dumps(component["Supporting Facts"], ensure_ascii=False, indent=2),
                 "```",
                 "",
             ]
@@ -171,16 +190,17 @@ def render_repair_summary(selection: dict[str, Any], repair_plan: dict[str, Any]
         lines.extend(["- No problem components were selected.", ""])
         return "\n".join(lines).rstrip() + "\n"
 
-    for role in selection["component_order"]:
-        component = selection["components"][role]
+    for component in repair_plan["components"]:
         lines.append(
-            f"- `{role}`: status=`{component['status']}`, behavior=`{component['repair_behavior']}`, action=`{component['recommended_action']}`"
+            f"- `{component['role']}`: status=`{component['status']}`, confidence=`{component['confidence']}`"
         )
 
     lines.extend(["", "## Overall Guidance", ""])
     lines.append("- Combine the selected component prompts directly; do not collapse them into a single primary cause.")
     for component in repair_plan["components"]:
-        lines.append(f"- `{component['role']}`: {component['problem_summary']}")
+        lines.append(
+            f"- `{component['role']}`: use the selected prompt together with the cropped component schema in `Supporting Facts`."
+        )
 
     return "\n".join(lines).rstrip() + "\n"
 

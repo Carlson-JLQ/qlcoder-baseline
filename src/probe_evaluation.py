@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+from concurrent.futures import ThreadPoolExecutor
 import importlib
 import json
 import logging
@@ -546,6 +547,74 @@ def to_component_run_dict(result: Optional[RunCountResult], alignment: Optional[
     return run_dict
 
 
+def execute_component_runs(
+    *,
+    role: str,
+    probe_path: Path,
+    vuln_db_path: Path,
+    fixed_db_path: Path,
+    codeql_path: str,
+    runtime_dir: Path,
+    alignment_dir: Path,
+    cve_id: str,
+    fix_info_path: Path,
+    target_context: dict[str, Any],
+) -> tuple[RunCountResult, RunCountResult, Optional[AlignmentResult], Optional[AlignmentResult]]:
+    def run_vulnerable() -> tuple[RunCountResult, Optional[AlignmentResult]]:
+        vuln_result = run_query_count(
+            probe_path,
+            vuln_db_path,
+            codeql_path,
+            runtime_dir,
+            f"{role}_vulnerable",
+        )
+        vuln_alignment = None
+        if role in {"source", "sink"}:
+            vuln_alignment = run_alignment_evaluation(
+                role=role,
+                probe_path=probe_path,
+                database_path=vuln_db_path,
+                cve_id=cve_id,
+                codeql_path=codeql_path,
+                fix_info_path=fix_info_path,
+                output_dir=alignment_dir,
+                prefix=f"{role}_vulnerable_alignment",
+                target_context=target_context,
+            )
+        return vuln_result, vuln_alignment
+
+    def run_fixed() -> tuple[RunCountResult, Optional[AlignmentResult]]:
+        fixed_result = run_query_count(
+            probe_path,
+            fixed_db_path,
+            codeql_path,
+            runtime_dir,
+            f"{role}_fixed",
+        )
+        fixed_alignment = None
+        if role in {"source", "sink"}:
+            fixed_alignment = run_alignment_evaluation(
+                role=role,
+                probe_path=probe_path,
+                database_path=fixed_db_path,
+                cve_id=cve_id,
+                codeql_path=codeql_path,
+                fix_info_path=fix_info_path,
+                output_dir=alignment_dir,
+                prefix=f"{role}_fixed_alignment",
+                target_context=target_context,
+            )
+        return fixed_result, fixed_alignment
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        vuln_future = executor.submit(run_vulnerable)
+        fixed_future = executor.submit(run_fixed)
+        vuln_result, vuln_alignment = vuln_future.result()
+        fixed_result, fixed_alignment = fixed_future.result()
+
+    return vuln_result, fixed_result, vuln_alignment, fixed_alignment
+
+
 PROBLEM_STATUS_SET = {
     "missing_component",
     "compile_failed",
@@ -852,43 +921,18 @@ def evaluate_probe_query(
         fixed_alignment = None
         if component["present_in_query"] and component["probe_path"] and component["compile_success"]:
             probe_path = Path(component["probe_path"])
-            vuln_result = run_query_count(
-                probe_path,
-                vuln_db_path,
-                codeql_path,
-                runtime_dir,
-                f"{role}_vulnerable",
+            vuln_result, fixed_result, vuln_alignment, fixed_alignment = execute_component_runs(
+                role=role,
+                probe_path=probe_path,
+                vuln_db_path=vuln_db_path,
+                fixed_db_path=fixed_db_path,
+                codeql_path=codeql_path,
+                runtime_dir=runtime_dir,
+                alignment_dir=alignment_dir,
+                cve_id=cve_id,
+                fix_info_path=fix_info_path,
+                target_context=target_context,
             )
-            fixed_result = run_query_count(
-                probe_path,
-                fixed_db_path,
-                codeql_path,
-                runtime_dir,
-                f"{role}_fixed",
-            )
-            if role in {"source", "sink"}:
-                vuln_alignment = run_alignment_evaluation(
-                    role=role,
-                    probe_path=probe_path,
-                    database_path=vuln_db_path,
-                    cve_id=cve_id,
-                    codeql_path=codeql_path,
-                    fix_info_path=fix_info_path,
-                    output_dir=alignment_dir,
-                    prefix=f"{role}_vulnerable_alignment",
-                    target_context=target_context,
-                )
-                fixed_alignment = run_alignment_evaluation(
-                    role=role,
-                    probe_path=probe_path,
-                    database_path=fixed_db_path,
-                    cve_id=cve_id,
-                    codeql_path=codeql_path,
-                    fix_info_path=fix_info_path,
-                    output_dir=alignment_dir,
-                    prefix=f"{role}_fixed_alignment",
-                    target_context=target_context,
-                )
 
         vuln_count = vuln_result.num_results if vuln_result else 0
         fixed_count = fixed_result.num_results if fixed_result else 0

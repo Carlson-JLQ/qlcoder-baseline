@@ -215,3 +215,4 @@ data/chroma_db/
 logs/
 RuleRefiner
 src/output/
+query-examples-java/CVE-2025-49656-workflow-timed-qlcoder-parallel

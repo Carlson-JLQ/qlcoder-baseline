@@ -405,326 +405,522 @@ probe 不能被当成“只看输出行数”的统一对象，而应按组件�
 
 下面按角色给出明确映射规则。这里描述的都是 `verdict.status` 的映射规则，也就是：在给定 `present_in_query`、`compile_success`、`run.vulnerable.*`、`run.fixed.*`、`original_query.*` 等字段后，应如何确定每个组件最终写入 `verdict.status` 的状态值。
 
+## 组件级返回格式
+
+组件级反馈建议统一组织成一个 JSON 对象，并且只保留三个字段：
+
+```json
+{
+  "Component": "source",
+  "Repair Prompt": {
+    "en": "The source probe has matches, but it does not behave like a target-aligned vulnerable-side source.",
+    "zh": "当前 source probe 虽然有结果，但它并不像一个与目标对齐的漏洞侧 source。"
+  },
+  "Supporting Facts": {
+    "present_in_query": true,
+    "compile_success": true,
+    "compile_error": null,
+    "run": {
+      "vulnerable": {
+        "success": true,
+        "num_results": 12,
+        "error": null,
+        "num_aligned_files": 1,
+        "num_aligned_methods": 0,
+        "aligned_files": [
+          "src/main/java/com/example/A.java"
+        ],
+        "aligned_methods": [],
+        "target_file_coverage": 0.5,
+        "target_method_coverage": 0.0,
+        "hit_files": [
+          "src/main/java/com/example/A.java",
+          "src/main/java/com/example/B.java",
+          "src/main/java/com/example/C.java",
+          "src/main/java/com/example/D.java",
+          "src/main/java/com/example/E.java"
+        ],
+        "hit_methods": [
+          "src/main/java/com/example/A.java:A:foo",
+          "src/main/java/com/example/B.java:B:bar",
+          "src/main/java/com/example/C.java:C:baz",
+          "src/main/java/com/example/D.java:D:qux",
+          "src/main/java/com/example/E.java:E:quux"
+        ]
+      },
+      "fixed": {
+        "success": true,
+        "num_results": 10,
+        "error": null,
+        "num_aligned_files": 0,
+        "num_aligned_methods": 0,
+        "aligned_files": [],
+        "aligned_methods": [],
+        "target_file_coverage": 0.0,
+        "target_method_coverage": 0.0,
+        "hit_files": [
+          "src/main/java/com/example/C.java",
+          "src/main/java/com/example/D.java",
+          "src/main/java/com/example/E.java",
+          "src/main/java/com/example/F.java",
+          "src/main/java/com/example/G.java"
+        ],
+        "hit_methods": [
+          "src/main/java/com/example/C.java:C:baz",
+          "src/main/java/com/example/D.java:D:qux",
+          "src/main/java/com/example/E.java:E:quux",
+          "src/main/java/com/example/F.java:F:corge",
+          "src/main/java/com/example/G.java:G:grault"
+        ]
+      }
+    },
+    "verdict": {
+      "status": "off_target",
+      "confidence": 0.87
+    }
+  }
+}
+```
+
+说明：
+
+- `Component`
+  - 只返回组件名称本身，例如 `source`、`sink`、`barrier`、`flow`。
+- `Repair Prompt`
+  - 直接返回对应状态的 prompt。
+  - 如果该状态不属于后续修复主路径，则这里可以返回 `null`。
+- `Supporting Facts`
+  - 直接返回“裁剪后的组件 schema”。
+  - 不要改变组件 schema 本身，只是在返回结果里排除少数字段。
+  - 默认不包含以下字段：
+    - `generation_mode`
+    - `source_predicate`
+    - `sarif_path`
+    - `probe_path`
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 
 ## Source Status 映射规则
 
 ### `missing_component`
 
 - 条件：`present_in_query = false`
-- 场景：原 query 中没有有效 `isSource`。
-
+- `Component`
+  - `source`
+- `Repair Prompt`
+  - 返回 `source.missing_component`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `source` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `compile_failed`
 
 - 条件：`present_in_query = true` 且 `compile_success = false`
-- 场景：source probe 无法独立编译。
-
+- `Component`
+  - `source`
+- `Repair Prompt`
+  - 返回 `source.compile_failed`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `source` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `empty`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results = 0`
-  - `run.fixed.num_results = 0`
-- 场景：source 在两侧都没有事实，常见于入口过窄、类型不对或入口选错。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_results = 0` 且 `run.fixed.num_results = 0`
+- `Component`
+  - `source`
+- `Repair Prompt`
+  - 返回 `source.empty`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `source` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `only_fixed`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results = 0`
-  - `run.fixed.num_results > 0`
-- 场景：source 只在修复侧出现，通常表示方向反了。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_results = 0` 且 `run.fixed.num_results > 0`
+- `Component`
+  - `source`
+- `Repair Prompt`
+  - 返回 `source.only_fixed`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `source` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `off_target`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results > 0`
-  - `run.vulnerable.num_aligned_methods = 0`
-  - `run.fixed.num_aligned_methods = 0`
-- 场景：source 虽然有结果，但完全没有落在目标方法上，说明定义偏离漏洞入口。
-
+- 条件：`compile_success = true`，至少一侧有结果，但 `run.vulnerable.num_aligned_methods = 0` 且未满足 `empty`、`only_fixed`、`good_anchor`
+- `Component`
+  - `source`
+- `Repair Prompt`
+  - 返回 `source.off_target`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `source` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `good_anchor`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_aligned_methods > 0`
-  - `run.fixed.num_aligned_methods = 0`
-- 场景：source 在漏洞侧命中 target method，而在修复侧不命中，是较强的正向锚点。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_aligned_methods > 0` 且 `run.fixed.num_aligned_methods = 0`
+- `Component`
+  - `source`
+- `Repair Prompt`
+  - 返回 `null`。
+- `Supporting Facts`
+  - 返回当前 `source` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `weak_but_present`
 
-- 条件：满足以下任一类：
-  - `run.vulnerable.num_results > 0` 且 `run.fixed.num_results > 0`，但没有更强证据支持 `good_anchor` 或 `off_target`。
-  - `run.vulnerable.num_aligned_methods > 0` 且 `run.fixed.num_aligned_methods > 0`。
-- 场景：source 存在，但区分性不足；或者虽然对齐到了 target method，但两侧都命中。
-
+- 条件：`compile_success = true`，至少一侧有结果，且未满足 `empty`、`only_fixed`、`off_target`、`good_anchor`
+- `Component`
+  - `source`
+- `Repair Prompt`
+  - 返回 `source.weak_but_present`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `source` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `others`
 
-- 条件：
-  - 不满足上面任何已显式列出的 `source` 状态条件。
-- 场景：
-  - 所有暂未单独拆分、但又不能稳定归入 `missing_component`、`compile_failed`、`empty`、`only_fixed`、`off_target`、`good_anchor`、`weak_but_present` 的边界情况。
-  - 例如：
-    - `run.vulnerable.num_results > 0`、`run.fixed.num_results = 0`，但只有文件级命中，没有方法级命中。
-    - `run.vulnerable.num_results > 0`、`run.fixed.num_results = 0`，且当前对齐结果不足以稳定归入 `good_anchor` 或 `off_target`。
-- 说明：
-  - 这是 `source` 的兜底状态。
-  - `verdict.confidence` 固定记为 `1`。
-
-
+- 条件：未落入以上任何一种 `source` 状态
+- `Component`
+  - `source`
+- `Repair Prompt`
+  - 返回 `source.others`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `source` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ## Sink Status 映射规则
 
-`sink` 与 `source` 类似，但更偏向“是否命中目标危险方法”。
-
 ### `missing_component`
 
 - 条件：`present_in_query = false`
-- 场景：原 query 中没有有效 `isSink`。
-
+- `Component`
+  - `sink`
+- `Repair Prompt`
+  - 返回 `sink.missing_component`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `sink` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `compile_failed`
 
 - 条件：`present_in_query = true` 且 `compile_success = false`
-- 场景：sink probe 无法独立编译。
-
+- `Component`
+  - `sink`
+- `Repair Prompt`
+  - 返回 `sink.compile_failed`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `sink` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `empty`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results = 0`
-  - `run.fixed.num_results = 0`
-- 场景：sink 在两侧都没有结果。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_results = 0` 且 `run.fixed.num_results = 0`
+- `Component`
+  - `sink`
+- `Repair Prompt`
+  - 返回 `sink.empty`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `sink` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `only_fixed`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results = 0`
-  - `run.fixed.num_results > 0`
-- 场景：sink 只在修复侧命中，通常说明危险点建模反了。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_results = 0` 且 `run.fixed.num_results > 0`
+- `Component`
+  - `sink`
+- `Repair Prompt`
+  - 返回 `sink.only_fixed`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `sink` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `off_target`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results > 0`
-  - `run.vulnerable.num_aligned_methods = 0`
-  - `run.fixed.num_aligned_methods = 0`
-- 场景：sink 有结果，但没有真正落在目标危险方法上。
-
+- 条件：`compile_success = true`，至少一侧有结果，但 `run.vulnerable.num_aligned_methods = 0` 且未满足 `empty`、`only_fixed`、`good_anchor`
+- `Component`
+  - `sink`
+- `Repair Prompt`
+  - 返回 `sink.off_target`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `sink` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `good_anchor`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_aligned_methods > 0`
-  - `run.fixed.num_aligned_methods = 0`
-- 场景：sink 在漏洞侧命中 target method，而在修复侧不命中，是较强危险点锚点。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_aligned_methods > 0` 且 `run.fixed.num_aligned_methods = 0`
+- `Component`
+  - `sink`
+- `Repair Prompt`
+  - 返回 `null`。
+- `Supporting Facts`
+  - 返回当前 `sink` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `weak_but_present`
 
-- 条件：满足以下任一类：
-  - `run.vulnerable.num_results > 0` 且 `run.fixed.num_results > 0`，但没有更强证据支持 `good_anchor` 或 `off_target`。
-  - `run.vulnerable.num_aligned_methods > 0` 且 `run.fixed.num_aligned_methods > 0`。
-- 场景：sink 存在，但还不够区分。
-
+- 条件：`compile_success = true`，至少一侧有结果，且未满足 `empty`、`only_fixed`、`off_target`、`good_anchor`
+- `Component`
+  - `sink`
+- `Repair Prompt`
+  - 返回 `sink.weak_but_present`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `sink` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `others`
 
-- 条件：
-  - 不满足上面任何已显式列出的 `sink` 状态条件。
-- 场景：
-  - 所有暂未单独拆分、但又不能稳定归入 `missing_component`、`compile_failed`、`empty`、`only_fixed`、`off_target`、`good_anchor`、`weak_but_present` 的边界情况。
-  - 例如：
-    - 命中了 target file，但没有命中 target method。
-- 说明：
-  - 这是 `sink` 的兜底状态。
-  - `verdict.confidence` 固定记为 `1`。
-
-
+- 条件：未落入以上任何一种 `sink` 状态
+- `Component`
+  - `sink`
+- `Repair Prompt`
+  - 返回 `sink.others`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `sink` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ## Barrier Status 映射规则
-
-`barrier` 不能沿用最终 query 的“fixed 命中就是误报”那套逻辑。
 
 ### `missing_component`
 
 - 条件：`present_in_query = false`
-- 场景：原 query 中没有有效 barrier 组件。
-
+- `Component`
+  - `barrier`
+- `Repair Prompt`
+  - 返回 `null`。
+- `Supporting Facts`
+  - 返回当前 `barrier` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `compile_failed`
 
 - 条件：`present_in_query = true` 且 `compile_success = false`
-- 场景：barrier probe 无法独立编译。
-
+- `Component`
+  - `barrier`
+- `Repair Prompt`
+  - 返回 `barrier.compile_failed`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `barrier` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `absent`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results = 0`
-  - `run.fixed.num_results = 0`
-- 场景：barrier 两侧都没有事实。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_results = 0` 且 `run.fixed.num_results = 0`
+- `Component`
+  - `barrier`
+- `Repair Prompt`
+  - 返回 `null`。
+- `Supporting Facts`
+  - 返回当前 `barrier` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `repair_only`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results = 0`
-  - `run.fixed.num_results > 0`
-- 场景：barrier 只在修复侧出现，是典型修复侧保护信号。
-- 说明：
-  - 这通常表示一个合理的 repair-side barrier 信号。
-  - 它应保留在组件级 `verdict.status` 中，但默认不作为“有问题组件”进入顶层 `problem_components`。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_results = 0` 且 `run.fixed.num_results > 0`
+- `Component`
+  - `barrier`
+- `Repair Prompt`
+  - 返回 `null`。
+- `Supporting Facts`
+  - 返回当前 `barrier` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `useful_repair_signal`
 
-- 条件：
-  - `compile_success = true`
-  - `run.fixed.num_results > run.vulnerable.num_results`
-  - 且不满足 `repair_only`
-- 场景：barrier 在修复侧比漏洞侧更强。
-- 说明：
-  - 这通常也是正向修复侧信号。
-  - 它默认不作为“有问题组件”进入顶层 `problem_components`，除非后续另有更强规则要求关注 barrier。
-
+- 条件：`compile_success = true` 且 `run.fixed.num_results > run.vulnerable.num_results`
+- `Component`
+  - `barrier`
+- `Repair Prompt`
+  - 返回 `null`。
+- `Supporting Facts`
+  - 返回当前 `barrier` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `overblocking_suspect`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results > run.fixed.num_results * 2`
-  - `original_query.vuln_num_results = 0`
-  - `original_query.fixed_num_results = 0`
-- 场景：barrier 在漏洞侧过强，而原 query 仍然是 `0/0`，说明它可能把本应存在的漏洞路径压掉了。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_results > run.fixed.num_results * 2`，并且 `original_query.vuln_num_results = 0` 且 `original_query.fixed_num_results = 0`
+- `Component`
+  - `barrier`
+- `Repair Prompt`
+  - 返回 `barrier.overblocking_suspect`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `barrier` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `non_discriminative`
 
-- 条件：
-  - `compile_success = true`
-  - 两侧都有 barrier 结果。
-  - 不满足 `repair_only`、`useful_repair_signal`、`overblocking_suspect`。
-- 场景：barrier 在两侧都存在，但区分性不够。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_results > 0` 且 `run.fixed.num_results > 0`
+- `Component`
+  - `barrier`
+- `Repair Prompt`
+  - 返回 `barrier.non_discriminative`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `barrier` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `others`
 
-- 条件：
-  - 不满足上面任何已显式列出的 `barrier` 状态条件。
-- 场景：
-  - 所有暂未单独拆分、但又不能稳定归入 `missing_component`、`compile_failed`、`absent`、`repair_only`、`useful_repair_signal`、`overblocking_suspect`、`non_discriminative` 的边界情况。
-  - 例如：
-    - barrier 命中数接近，但明显集中在修复新增 helper 上。
-- 说明：
-  - 这是 `barrier` 的兜底状态。
-  - `verdict.confidence` 固定记为 `1`。
-
-
+- 条件：未落入以上任何一种 `barrier` 状态
+- `Component`
+  - `barrier`
+- `Repair Prompt`
+  - 返回 `barrier.others`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `barrier` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### Barrier 状态设计说明
 
-这里需要强调：`barrier` 的语义和 `source` / `sink` 不同。
-
-- `source` / `sink` 更接近正证据。
-  - 它们是在描述“漏洞入口在哪里”“危险点在哪里”。
-- `barrier` 更接近负证据或抑制条件。
-  - 它描述的是哪些路径会被验证、净化、规范化或直接拦住。
-
-因此，对 `barrier` 不能套用“漏洞侧命中越多越好，修复侧命中就是坏事”这套标准。
-
-当前这组状态的设计意图是：
-
-- `repair_only`
-  - 优先解释为正向修复侧信号。
-  - 因为它表示 barrier 只在修复侧出现，这通常和补丁引入的新校验、新净化逻辑一致。
-- `useful_repair_signal`
-  - 也优先解释为正向修复侧信号。
-  - 因为它表示 barrier 在两侧都可能存在，但修复侧更强，这通常对应“原来有弱校验，修复后变强”。
-- `overblocking_suspect`
-  - 才优先解释为 barrier 组件本身有问题。
-  - 因为它表示漏洞侧 barrier 特别强，而原 query 又仍然是 `0/0`，这时最合理的怀疑是 barrier 把本应存在的漏洞路径压掉了。
-- `non_discriminative`
-  - 则表示 barrier 更像共享条件，而不是明确的修复侧保护逻辑。
-  - 它不是最严重的问题，但说明 barrier 还不够专化。
-
-换句话说，当前 `barrier` 判定规则背后的原则是：
-
-- 修复侧更强，不一定是坏事，很多时候反而是合理现象。
-- 漏洞侧异常强，才更值得怀疑 barrier 过强或方向不对。
-
-这也是为什么：
-
-- `repair_only`
-- `useful_repair_signal`
-
-默认不进入顶层 `problem_components`，而：
-
-- `overblocking_suspect`
-- `non_discriminative`
-
-仍然保留为需要进一步关注的 barrier 状态。
-
+- `absent`、`repair_only`、`useful_repair_signal` 默认不进入 `problem_components`。
+- `overblocking_suspect`、`non_discriminative`、`others` 默认进入 `problem_components`。
+- `missing_component` 是否进入修复主路径，取决于后续实现是否把“缺失 barrier”视为问题组件。
 
 ## Flow Status 映射规则
 
 ### `missing_component`
 
-- 条件：
-  - `present_in_query = false`
-  - `original_query.vuln_num_results = 0`
-  - `original_query.fixed_num_results = 0`
-- 场景：query 没有显式 `isAdditionalFlowStep`，且整体也没有表现出无需该组件的证据。
-
+- 条件：`present_in_query = false` 且 `original_query.vuln_num_results = 0` 且 `original_query.fixed_num_results = 0`
+- `Component`
+  - `flow`
+- `Repair Prompt`
+  - 返回 `flow.missing_component`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `flow` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `likely_not_needed`
 
-- 条件：
-  - `present_in_query = false`
-  - `original_query.vuln_num_results > 0` 或 `original_query.fixed_num_results > 0`
-- 场景：query 没有显式 flow step，但原 query 已经能跑出结果。
-
+- 条件：`present_in_query = false` 且 (`original_query.vuln_num_results > 0` 或 `original_query.fixed_num_results > 0`)
+- `Component`
+  - `flow`
+- `Repair Prompt`
+  - 返回 `null`。
+- `Supporting Facts`
+  - 返回当前 `flow` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `compile_failed`
 
 - 条件：`present_in_query = true` 且 `compile_success = false`
-- 场景：flow probe 无法独立编译。
-
+- `Component`
+  - `flow`
+- `Repair Prompt`
+  - 返回 `flow.compile_failed`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `flow` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `empty`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results = 0`
-  - `run.fixed.num_results = 0`
-- 场景：flow 没有桥接边事实。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_results = 0` 且 `run.fixed.num_results = 0`
+- `Component`
+  - `flow`
+- `Repair Prompt`
+  - 返回 `flow.empty`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `flow` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `useful_bridge`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results > 0`
-  - `run.fixed.num_results = 0`
-- 场景：flow 在漏洞侧提供桥接边，而在修复侧没有。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_results > 0` 且 `run.fixed.num_results = 0`
+- `Component`
+  - `flow`
+- `Repair Prompt`
+  - 返回 `null`。
+- `Supporting Facts`
+  - 返回当前 `flow` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `noisy_bridge`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results > 0`
-  - `run.fixed.num_results > 0`
-  - `abs(run.vulnerable.num_results - run.fixed.num_results)` 很小
-- 场景：flow 两侧边很多且数量接近，说明桥接边很噪。
-
+- 条件：`compile_success = true` 且 `run.vulnerable.num_results > 0` 且 `run.fixed.num_results > 0`，并且两侧数量接近
+- `Component`
+  - `flow`
+- `Repair Prompt`
+  - 返回 `flow.noisy_bridge`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `flow` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `weak_bridge`
 
-- 条件：
-  - `compile_success = true`
-  - `run.vulnerable.num_results > 0` 或 `run.fixed.num_results > 0`
-  - 但不满足 `useful_bridge`、`noisy_bridge`
-- 场景：flow 有一定桥接证据，但还不够明确。
-
+- 条件：`compile_success = true` 且至少一侧有结果，但未满足 `empty`、`useful_bridge`、`noisy_bridge`
+- `Component`
+  - `flow`
+- `Repair Prompt`
+  - 返回 `flow.weak_bridge`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `flow` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ### `others`
 
-- 条件：
-  - 不满足上面任何已显式列出的 `flow` 状态条件。
-- 场景：
-  - 所有暂未单独拆分、但又不能稳定归入 `missing_component`、`likely_not_needed`、`compile_failed`、`empty`、`useful_bridge`、`noisy_bridge`、`weak_bridge` 的边界情况。
-  - 例如：
-    - flow 边很多，但只有少量边接近 source/sink 邻域。
-- 说明：
-  - 这是 `flow` 的兜底状态。
-  - `verdict.confidence` 固定记为 `1`。
-
-
+- 条件：未落入以上任何一种 `flow` 状态
+- `Component`
+  - `flow`
+- `Repair Prompt`
+  - 返回 `flow.others`。
+  - 具体 prompt 内容从 `codeql-repair-templates.md` 的对应条目读取。
+- `Supporting Facts`
+  - 返回当前 `flow` 组件的裁剪版 schema。
+  - 默认保留 `present_in_query`、`compile_success`、`compile_error`、`run`、`verdict` 这些结构。
+  - 不包含 `generation_mode`、`source_predicate`、`sarif_path`、`probe_path`。
+  - `hit_files` 和 `hit_methods` 如果出现，都只保留前 `5` 个。
 ## 顶层问题组件汇总规则
 
 顶层不再输出“primary suspect / secondary suspect”，而是输出 `problem_components`。
