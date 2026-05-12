@@ -15,6 +15,7 @@ try:
         compile_query,
         evaluate_probe_query,
         load_query_execution_runner,
+        prepare_query_workspace,
         resolve_default_codeql_path,
         resolve_default_fix_info_path,
     )
@@ -30,6 +31,7 @@ except Exception:
         compile_query,
         evaluate_probe_query,
         load_query_execution_runner,
+        prepare_query_workspace,
         resolve_default_codeql_path,
         resolve_default_fix_info_path,
     )
@@ -65,9 +67,12 @@ def run_official_evaluation(
     output_dir: Path,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    compile_result = compile_query(query_path, codeql_path)
+    workspace_dir = output_dir / "query_workspace"
+    staged_query_path = prepare_query_workspace(query_path, workspace_dir)
+    compile_result = compile_query(staged_query_path, codeql_path)
     result: dict[str, Any] = {
         "query_path": str(query_path),
+        "workspace_query_path": str(staged_query_path),
         "compile_success": compile_result["success"],
         "execution_success": False,
         "summary": "",
@@ -84,7 +89,7 @@ def run_official_evaluation(
         query_runner = load_query_execution_runner(codeql_path)
         summary, vuln_eval, fixed_eval, execution_success = asyncio.run(
             query_runner(
-                str(query_path),
+                str(staged_query_path),
                 str(vuln_db_path),
                 str(fixed_db_path),
                 cve_id,

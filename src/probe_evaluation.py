@@ -10,6 +10,7 @@ import importlib
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import types
@@ -39,6 +40,18 @@ def resolve_default_codeql_path() -> str:
 
 def resolve_default_fix_info_path() -> Path:
     return resolve_repo_root() / "data" / "fix_info.csv"
+
+
+def prepare_query_workspace(query_path: Path, workspace_dir: Path) -> Path:
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    staged_query_path = workspace_dir / query_path.name
+    shutil.copy2(query_path, staged_query_path)
+
+    qlpack_source = resolve_repo_root() / "qlpack.yml"
+    if qlpack_source.exists():
+        shutil.copy2(qlpack_source, workspace_dir / "qlpack.yml")
+
+    return staged_query_path
 
 
 def iso_now() -> str:
@@ -749,7 +762,9 @@ def evaluate_original_query_summary(
     runtime_dir: Path,
     codeql_path: str,
 ) -> dict[str, Any]:
-    compile_result = compile_query(query_path, codeql_path)
+    query_workspace = runtime_dir / "original_query_workspace"
+    staged_query_path = prepare_query_workspace(query_path, query_workspace)
+    compile_result = compile_query(staged_query_path, codeql_path)
     summary = {
         "compile_success": compile_result["success"],
         "vuln_num_results": 0,
@@ -767,7 +782,7 @@ def evaluate_original_query_summary(
         query_runner = load_query_execution_runner(codeql_path)
         _, vuln_eval, fixed_eval, _ = asyncio.run(
             query_runner(
-                str(query_path),
+                str(staged_query_path),
                 str(vuln_db_path),
                 str(fixed_db_path),
                 cve_id,
@@ -786,8 +801,8 @@ def evaluate_original_query_summary(
     except Exception as exc:
         LOGGER.warning("Official evaluation fallback for original query failed: %s", exc)
 
-    original_vuln = run_query_count(query_path, vuln_db_path, codeql_path, runtime_dir, "original_vulnerable")
-    original_fixed = run_query_count(query_path, fixed_db_path, codeql_path, runtime_dir, "original_fixed")
+    original_vuln = run_query_count(staged_query_path, vuln_db_path, codeql_path, runtime_dir, "original_vulnerable")
+    original_fixed = run_query_count(staged_query_path, fixed_db_path, codeql_path, runtime_dir, "original_fixed")
     summary.update(
         {
             "vuln_num_results": original_vuln.num_results if original_vuln.success else 0,

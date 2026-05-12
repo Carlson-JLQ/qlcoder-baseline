@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -72,6 +73,16 @@ ROLE_DEFAULT_QUERY_KIND = {
     "flow": "table",
 }
 PROBE_KIND_MODES = ("hybrid", "all-table", "all-problem")
+
+
+def resolve_repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def ensure_output_qlpack(output_dir: Path) -> None:
+    qlpack_source = resolve_repo_root() / "qlpack.yml"
+    if qlpack_source.exists():
+        shutil.copy2(qlpack_source, output_dir / "qlpack.yml")
 
 
 @dataclass
@@ -707,6 +718,7 @@ def extract_and_compile_components(
         else:
             output_dir = Path.cwd() / f"{query_label}-structural-extract"
     output_dir.mkdir(parents=True, exist_ok=True)
+    ensure_output_qlpack(output_dir)
 
     query_id_base = sanitize_id_fragment(query_label)
 
