@@ -1,0 +1,77 @@
+{
+  "vulnerability_research_summary": "这是一个典型的 SQL 注入漏洞，外部输入参与了 SQL 结构构造。",
+  "cve_information": "CVE-2022-45206 影响 Jeecg-boot v3.4.3，漏洞入口为 /sys/duplicate/check。",
+  "relevant_files": [
+    {
+      "file": "jeecg-boot-base-core/src/main/java/org/jeecg/common/util/SqlInjectionUtil.java",
+      "description": "核心过滤逻辑所在文件"
+    },
+    {
+      "file": "jeecg-module-system/jeecg-system-biz/src/main/java/org/jeecg/modules/system/controller/DuplicateCheckController.java",
+      "description": "请求入口和 mapper 调用位置"
+    }
+  ],
+  "sources": [
+    {
+      "description": "请求参数进入控制器",
+      "file": "DuplicateCheckController.java",
+      "location": "45-47, 53-54, 64-65",
+      "pattern": "控制器参数经过 getter 读取 tableName 和 fieldName",
+      "conceptual_role": "攻击者可控输入",
+      "pattern_category": "外部输入",
+      "ast_elements": [
+        "method parameter",
+        "getter call",
+        "string concatenation"
+      ],
+      "detection_strategy": "将请求对象中的字段视为 taint source"
+    }
+  ],
+  "sinks": [
+    {
+      "description": "MyBatis 动态 SQL 插值点",
+      "file": "SysDictMapper.xml",
+      "location": "101-107",
+      "pattern": "${tableName} 和 ${fieldName}",
+      "conceptual_role": "危险 SQL sink",
+      "pattern_category": "SQL structure interpolation",
+      "ast_elements": [
+        "mapped statement",
+        "template interpolation"
+      ],
+      "detection_strategy": "将参与 SQL 结构拼接的位置视为 sink"
+    }
+  ],
+  "sanitizers": [
+    {
+      "description": "新增 SQL 注释拦截逻辑",
+      "file": "SqlInjectionUtil.java",
+      "location": "274-284",
+      "pattern": "checkSqlAnnotation(String str)",
+      "conceptual_role": "修复新增的 barrier",
+      "pattern_category": "reject-on-pattern validation",
+      "ast_elements": [
+        "method call",
+        "regex matcher",
+        "exception throw"
+      ],
+      "detection_strategy": "将修复后新增的校验方法视为 sanitizer"
+    }
+  ],
+  "additional_taint_steps": [
+    {
+      "description": "getter 到字符串拼接的传播",
+      "file": "DuplicateCheckController.java",
+      "location": "64-65",
+      "pattern": "tableName + \",\" + fieldName",
+      "conceptual_role": "taint 传播步骤",
+      "pattern_category": "string-building propagation",
+      "ast_elements": [
+        "binary +",
+        "getter call"
+      ],
+      "detection_strategy": "字符串拼接保持 taint"
+    }
+  ],
+  "vulnerability_summary": "用户可控的 tableName 和 fieldName 经不充分过滤后进入动态 SQL。"
+}
