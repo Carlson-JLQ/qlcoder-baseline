@@ -193,6 +193,9 @@ def load_query_execution_runner(codeql_path: str):
 
 
 def run_query_count(query_path: Path, database_path: Path, codeql_path: str, work_dir: Path, prefix: str) -> RunCountResult:
+    query_path = query_path.resolve()
+    database_path = database_path.resolve()
+    work_dir = work_dir.resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     bqrs_path = work_dir / f"{prefix}.bqrs"
     csv_path = work_dir / f"{prefix}.csv"
@@ -371,8 +374,12 @@ def run_alignment_evaluation(
     prefix: str,
     target_context: dict[str, Any],
 ) -> AlignmentResult:
+    probe_path = probe_path.resolve()
+    database_path = database_path.resolve()
+    output_dir = output_dir.resolve()
     problem_probe_path = build_problem_alignment_probe(probe_path, role, output_dir)
-    sarif_path = output_dir / f"{prefix}.sarif"
+    problem_probe_path = problem_probe_path.resolve()
+    sarif_path = (output_dir / f"{prefix}.sarif").resolve()
 
     analyze_cmd = [
         codeql_path,
@@ -631,6 +638,7 @@ def execute_component_runs(
 PROBLEM_STATUS_SET = {
     "missing_component",
     "compile_failed",
+    "run_failed",
     "empty",
     "only_fixed",
     "off_target",
@@ -647,6 +655,7 @@ def _default_confidence(status: str) -> float:
     return {
         "missing_component": 0.95,
         "compile_failed": 0.95,
+        "run_failed": 0.95,
         "empty": 0.90,
         "only_fixed": 0.85,
         "off_target": 0.82,
@@ -669,6 +678,8 @@ def classify_component_status(
     role: str,
     present_in_query: bool,
     compile_success: Optional[bool],
+    vuln_run_success: Optional[bool],
+    fixed_run_success: Optional[bool],
     vuln_count: int,
     fixed_count: int,
     vuln_aligned_methods: int,
@@ -684,6 +695,9 @@ def classify_component_status(
 
     if compile_success is False:
         return ("compile_failed", _default_confidence("compile_failed"))
+
+    if vuln_run_success is False or fixed_run_success is False:
+        return ("run_failed", _default_confidence("run_failed"))
 
     if role == "barrier":
         if vuln_count == 0 and fixed_count == 0:
@@ -935,7 +949,7 @@ def evaluate_probe_query(
         vuln_alignment = None
         fixed_alignment = None
         if component["present_in_query"] and component["probe_path"] and component["compile_success"]:
-            probe_path = Path(component["probe_path"])
+            probe_path = Path(component["probe_path"]).resolve()
             vuln_result, fixed_result, vuln_alignment, fixed_alignment = execute_component_runs(
                 role=role,
                 probe_path=probe_path,
@@ -960,6 +974,8 @@ def evaluate_probe_query(
             role=role,
             present_in_query=component["present_in_query"],
             compile_success=component["compile_success"],
+            vuln_run_success=vuln_result.success if vuln_result else None,
+            fixed_run_success=fixed_result.success if fixed_result else None,
             vuln_count=vuln_count,
             fixed_count=fixed_count,
             vuln_aligned_methods=vuln_aligned_methods,
