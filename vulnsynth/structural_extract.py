@@ -547,14 +547,14 @@ def generate_probe_query(
     return "\n".join(block for block in blocks if block is not None)
 
 
-def build_component_query(
+def prepare_component_query_parts(
     role: str,
     query_id_base: str,
     config: ConfigInfo,
     grouped_toplevel: dict[str, list[str]],
     role_predicate: PredicateInfo,
     probe_kind_mode: str,
-) -> tuple[str, str, str]:
+) -> dict[str, Any]:
     imports = [
         item for item in grouped_toplevel.get("import", [])
         if "::PathGraph" not in item
@@ -598,17 +598,105 @@ def build_component_query(
         generation_mode = "lifted_predicate_body"
 
     query_kind = resolve_query_kind(role, probe_kind_mode)
-    component_query = generate_probe_query(
+    return {
+        "role": role,
+        "query_id_base": query_id_base,
+        "imports": imports,
+        "support_blocks": dedupe_preserve_order(support_blocks),
+        "predicate_text": predicate_text,
+        "parameter_names": parameter_names,
+        "parameter_types": parameter_types,
+        "generation_mode": generation_mode,
+        "query_kind": query_kind,
+    }
+
+
+def build_component_query(
+    role: str,
+    query_id_base: str,
+    config: ConfigInfo,
+    grouped_toplevel: dict[str, list[str]],
+    role_predicate: PredicateInfo,
+    probe_kind_mode: str,
+) -> tuple[str, str, str]:
+    parts = prepare_component_query_parts(
         role=role,
         query_id_base=query_id_base,
-        imports=imports,
-        support_blocks=dedupe_preserve_order(support_blocks),
-        predicate_text=predicate_text,
-        parameter_names=parameter_names,
-        parameter_types=parameter_types,
-        query_kind=query_kind,
+        config=config,
+        grouped_toplevel=grouped_toplevel,
+        role_predicate=role_predicate,
+        probe_kind_mode=probe_kind_mode,
     )
-    return component_query, generation_mode, query_kind
+    component_query = generate_probe_query(
+        role=role,
+        query_id_base=parts["query_id_base"],
+        imports=parts["imports"],
+        support_blocks=parts["support_blocks"],
+        predicate_text=parts["predicate_text"],
+        parameter_names=parts["parameter_names"],
+        parameter_types=parts["parameter_types"],
+        query_kind=parts["query_kind"],
+    )
+    return component_query, parts["generation_mode"], parts["query_kind"]
+
+
+def prune_component_query(
+    *,
+    role: str,
+    full_component_query: str,
+    query_id_base: str,
+    config: ConfigInfo,
+    grouped_toplevel: dict[str, list[str]],
+    role_predicate: PredicateInfo,
+    probe_kind_mode: str,
+) -> str:
+    if config.style != "configsig_module":
+        return full_component_query
+
+    parts = prepare_component_query_parts(
+        role=role,
+        query_id_base=query_id_base,
+        config=config,
+        grouped_toplevel=grouped_toplevel,
+        role_predicate=role_predicate,
+        probe_kind_mode=probe_kind_mode,
+    )
+    support_blocks = parts["support_blocks"]
+    if not support_blocks:
+        return full_component_query
+
+    try:
+        try:
+            from .component_pruner import prune_support_blocks_for_role
+        except Exception:
+            from component_pruner import prune_support_blocks_for_role
+
+        pruned_support_blocks = prune_support_blocks_for_role(
+            role_predicate_body=role_predicate.body_text,
+            role=role,
+            support_blocks=support_blocks,
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "Failed to prune generated probe for role '%s'; falling back to full probe: %s",
+            role,
+            exc,
+        )
+        return full_component_query
+
+    if pruned_support_blocks == support_blocks:
+        return full_component_query
+
+    return generate_probe_query(
+        role=role,
+        query_id_base=parts["query_id_base"],
+        imports=parts["imports"],
+        support_blocks=pruned_support_blocks,
+        predicate_text=parts["predicate_text"],
+        parameter_names=parts["parameter_names"],
+        parameter_types=parts["parameter_types"],
+        query_kind=parts["query_kind"],
+    )
 
 
 def indent_block(text: str, prefix: str = "  ") -> str:
@@ -732,8 +820,17 @@ def extract_and_compile_components(
         if role_predicate is None:
             continue
 
-        component_query, generation_mode, query_kind = build_component_query(
+        full_component_query, generation_mode, query_kind = build_component_query(
             role=role,
+            query_id_base=query_id_base,
+            config=config,
+            grouped_toplevel=grouped_toplevel,
+            role_predicate=role_predicate,
+            probe_kind_mode=probe_kind_mode,
+        )
+        component_query = prune_component_query(
+            role=role,
+            full_component_query=full_component_query,
             query_id_base=query_id_base,
             config=config,
             grouped_toplevel=grouped_toplevel,

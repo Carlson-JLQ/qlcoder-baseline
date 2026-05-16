@@ -1,0 +1,245 @@
+{
+  "query_path": "/root/VulnSynth/vulnsynth/lsp_diagnostics/buggy_queries/query_combined_errors.ql",
+  "lsp_clean": false,
+  "total_errors": 10,
+  "total_warnings": 2,
+  "errors": [
+    {
+      "index": 0,
+      "location": {
+        "line_0based": 4,
+        "line_1based": 5,
+        "character": 7
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module java",
+      "hover_text": "",
+      "completions": [
+        "QlBuiltins"
+      ],
+      "source_snippet": "      4 |  */\n>>>   5 | import java\n      6 | import semmle.code.java.dataflow.DataFlow",
+      "candidate_fixes": [
+        "Replace with a valid member: QlBuiltins"
+      ]
+    },
+    {
+      "index": 1,
+      "location": {
+        "line_0based": 5,
+        "line_1based": 6,
+        "character": 7
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module semmle.code.java.dataflow.DataFlow",
+      "hover_text": "**query_combined_errors**\n\n Error type: multiple errors (combined: wrong method, missing import, type mistake)\n Represents a typical first-draft LLM output",
+      "completions": [
+        "QlBuiltins"
+      ],
+      "source_snippet": "      5 | import java\n>>>   6 | import semmle.code.java.dataflow.DataFlow\n      7 | ",
+      "candidate_fixes": [
+        "Replace with a valid member: QlBuiltins",
+        "The expected type is `multiple`. Make sure the predicate you're calling exists on this type."
+      ]
+    },
+    {
+      "index": 2,
+      "location": {
+        "line_0based": 7,
+        "line_1based": 8,
+        "character": 33
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [
+        "SqlInjectionConfig",
+        "QlBuiltins"
+      ],
+      "source_snippet": "      7 | \n>>>   8 | class SqlInjectionConfig extends DataFlow::Configuration {\n      9 |   SqlInjectionConfig() { this = \"SqlInjectionConfig\" }",
+      "candidate_fixes": [
+        "Replace with a valid member: SqlInjectionConfig, QlBuiltins"
+      ]
+    },
+    {
+      "index": 3,
+      "location": {
+        "line_0based": 10,
+        "line_1based": 11,
+        "character": 30
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "SqlInjectionConfig",
+        "string",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     10 | \n>>>  11 |   override predicate isSource(DataFlow::Node source) {\n     12 |     source instanceof HttpServletRequest and",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, SqlInjectionConfig"
+      ]
+    },
+    {
+      "index": 4,
+      "location": {
+        "line_0based": 11,
+        "line_1based": 12,
+        "character": 22
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve type HttpServletRequest",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "SqlInjectionConfig",
+        "string",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     11 |   override predicate isSource(DataFlow::Node source) {\n>>>  12 |     source instanceof HttpServletRequest and\n     13 |     //               ^^^^^^^^^^^^^^^^ ERROR: wrong type, should be a RemoteFlowSource",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, SqlInjectionConfig"
+      ]
+    },
+    {
+      "index": 5,
+      "location": {
+        "line_0based": 17,
+        "line_1based": 18,
+        "character": 28
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "SqlInjectionConfig",
+        "string",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     17 | \n>>>  18 |   override predicate isSink(DataFlow::Node sink) {\n     19 |     exists(Statement stmt |",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, SqlInjectionConfig"
+      ]
+    },
+    {
+      "index": 6,
+      "location": {
+        "line_0based": 18,
+        "line_1based": 19,
+        "character": 11
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve type Statement",
+      "hover_text": "",
+      "completions": [
+        "sink",
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "SqlInjectionConfig",
+        "string",
+        "getAQlClass",
+        "isSink",
+        "isSource"
+      ],
+      "source_snippet": "     18 |   override predicate isSink(DataFlow::Node sink) {\n>>>  19 |     exists(Statement stmt |\n     20 |       stmt.getSqlString() = sink.asExpr() and",
+      "candidate_fixes": [
+        "Replace with a valid member: sink, boolean, date, float, int"
+      ]
+    },
+    {
+      "index": 7,
+      "location": {
+        "line_0based": 21,
+        "line_1based": 22,
+        "character": 22
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve type ExecuteStatement",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "SqlInjectionConfig",
+        "string",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     21 |       //    ^^^^^^^^^^^^^ ERROR: Statement has no getSqlString\n>>>  22 |       stmt instanceof ExecuteStatement\n     23 |     )",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, SqlInjectionConfig"
+      ]
+    },
+    {
+      "index": 8,
+      "location": {
+        "line_0based": 26,
+        "line_1based": 27,
+        "character": 29
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "SqlInjectionConfig",
+        "string",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     26 | \n>>>  27 | from SqlInjectionConfig cfg, DataFlow::Node source, DataFlow::Node sink\n     28 | where cfg.hasFlow(source, sink)",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, SqlInjectionConfig"
+      ]
+    },
+    {
+      "index": 9,
+      "location": {
+        "line_0based": 26,
+        "line_1based": 27,
+        "character": 52
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "SqlInjectionConfig",
+        "string",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     26 | \n>>>  27 | from SqlInjectionConfig cfg, DataFlow::Node source, DataFlow::Node sink\n     28 | where cfg.hasFlow(source, sink)",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, SqlInjectionConfig"
+      ]
+    }
+  ],
+  "warnings": [
+    {
+      "location": "Line 11:21",
+      "message": "unused method 'isSource'"
+    },
+    {
+      "location": "Line 18:21",
+      "message": "unused method 'isSink'"
+    }
+  ]
+}

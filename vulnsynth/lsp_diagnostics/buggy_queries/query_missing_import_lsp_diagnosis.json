@@ -1,0 +1,221 @@
+{
+  "query_path": "/root/VulnSynth/vulnsynth/lsp_diagnostics/buggy_queries/query_missing_import.ql",
+  "lsp_clean": false,
+  "total_errors": 9,
+  "total_warnings": 2,
+  "errors": [
+    {
+      "index": 0,
+      "location": {
+        "line_0based": 4,
+        "line_1based": 5,
+        "character": 7
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module java",
+      "hover_text": "",
+      "completions": [
+        "QlBuiltins"
+      ],
+      "source_snippet": "      4 |  */\n>>>   5 | import java\n      6 | import semmle.code.java.dataflow.DataFlow",
+      "candidate_fixes": [
+        "Replace with a valid member: QlBuiltins"
+      ]
+    },
+    {
+      "index": 1,
+      "location": {
+        "line_0based": 5,
+        "line_1based": 6,
+        "character": 7
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module semmle.code.java.dataflow.DataFlow",
+      "hover_text": "**query_missing_import**\n\n Error type: missing import (RemoteFlowSource used without import)\n Error type: wrong class name in extends (DataFlow::Config vs DataFlow::Configuration)",
+      "completions": [
+        "QlBuiltins"
+      ],
+      "source_snippet": "      5 | import java\n>>>   6 | import semmle.code.java.dataflow.DataFlow\n      7 | // MISSING: import semmle.code.java.dataflow.FlowSources",
+      "candidate_fixes": [
+        "Replace with a valid member: QlBuiltins",
+        "The expected type is `missing`. Make sure the predicate you're calling exists on this type."
+      ]
+    },
+    {
+      "index": 2,
+      "location": {
+        "line_0based": 8,
+        "line_1based": 9,
+        "character": 23
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [
+        "MyConfig",
+        "QlBuiltins"
+      ],
+      "source_snippet": "      8 | \n>>>   9 | class MyConfig extends DataFlow::Configuration {\n     10 |   //                ^^^^^^^^^^^^^^^^^^^^^^",
+      "candidate_fixes": [
+        "Replace with a valid member: MyConfig, QlBuiltins"
+      ]
+    },
+    {
+      "index": 3,
+      "location": {
+        "line_0based": 14,
+        "line_1based": 15,
+        "character": 30
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "MyConfig",
+        "string",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     14 | \n>>>  15 |   override predicate isSource(DataFlow::Node source) {\n     16 |     source instanceof RemoteFlowSource",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, MyConfig"
+      ]
+    },
+    {
+      "index": 4,
+      "location": {
+        "line_0based": 15,
+        "line_1based": 16,
+        "character": 22
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve type RemoteFlowSource",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "MyConfig",
+        "string",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     15 |   override predicate isSource(DataFlow::Node source) {\n>>>  16 |     source instanceof RemoteFlowSource\n     17 |     //               ^^^^^^^^^^^^^^^^",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, MyConfig"
+      ]
+    },
+    {
+      "index": 5,
+      "location": {
+        "line_0based": 20,
+        "line_1based": 21,
+        "character": 28
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "MyConfig",
+        "string",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     20 | \n>>>  21 |   override predicate isSink(DataFlow::Node sink) {\n     22 |     exists(MethodAccess ma |",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, MyConfig"
+      ]
+    },
+    {
+      "index": 6,
+      "location": {
+        "line_0based": 21,
+        "line_1based": 22,
+        "character": 11
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve type MethodAccess",
+      "hover_text": "",
+      "completions": [
+        "sink",
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "MyConfig",
+        "string",
+        "getAQlClass",
+        "isSink",
+        "isSource"
+      ],
+      "source_snippet": "     21 |   override predicate isSink(DataFlow::Node sink) {\n>>>  22 |     exists(MethodAccess ma |\n     23 |       ma.getMethod().hasName(\"executeQuery\") and",
+      "candidate_fixes": [
+        "Replace with a valid member: sink, boolean, date, float, int"
+      ]
+    },
+    {
+      "index": 7,
+      "location": {
+        "line_0based": 28,
+        "line_1based": 29,
+        "character": 19
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "MyConfig",
+        "string",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     28 | \n>>>  29 | from MyConfig cfg, DataFlow::Node source, DataFlow::Node sink\n     30 | where cfg.hasFlow(source, sink)",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, MyConfig"
+      ]
+    },
+    {
+      "index": 8,
+      "location": {
+        "line_0based": 28,
+        "line_1based": 29,
+        "character": 42
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "MyConfig",
+        "string",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     28 | \n>>>  29 | from MyConfig cfg, DataFlow::Node source, DataFlow::Node sink\n     30 | where cfg.hasFlow(source, sink)",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, MyConfig"
+      ]
+    }
+  ],
+  "warnings": [
+    {
+      "location": "Line 15:21",
+      "message": "unused method 'isSource'"
+    },
+    {
+      "location": "Line 21:21",
+      "message": "unused method 'isSink'"
+    }
+  ]
+}

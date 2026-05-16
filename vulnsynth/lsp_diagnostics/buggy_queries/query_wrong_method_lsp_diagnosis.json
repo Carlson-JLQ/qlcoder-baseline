@@ -1,0 +1,306 @@
+{
+  "query_path": "/root/VulnSynth/vulnsynth/lsp_diagnostics/buggy_queries/query_wrong_method.ql",
+  "lsp_clean": false,
+  "total_errors": 13,
+  "total_warnings": 2,
+  "errors": [
+    {
+      "index": 0,
+      "location": {
+        "line_0based": 4,
+        "line_1based": 5,
+        "character": 7
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module java",
+      "hover_text": "",
+      "completions": [
+        "MyConfig",
+        "QlBuiltins"
+      ],
+      "source_snippet": "      4 |  */\n>>>   5 | import java\n      6 | import semmle.code.java.dataflow.DataFlow",
+      "candidate_fixes": [
+        "Replace with a valid member: MyConfig, QlBuiltins"
+      ]
+    },
+    {
+      "index": 1,
+      "location": {
+        "line_0based": 5,
+        "line_1based": 6,
+        "character": 7
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module semmle.code.java.dataflow.DataFlow",
+      "hover_text": "**query_wrong_method**\n\n Error type: wrong method name (getParam vs getParameter)\n Error type: wrong predicate (getFoo doesn't exist on Method)",
+      "completions": [
+        "MyConfig",
+        "QlBuiltins"
+      ],
+      "source_snippet": "      5 | import java\n>>>   6 | import semmle.code.java.dataflow.DataFlow\n      7 | import semmle.code.java.dataflow.FlowSources",
+      "candidate_fixes": [
+        "Replace with a valid member: MyConfig, QlBuiltins",
+        "The expected type is `wrong`. Make sure the predicate you're calling exists on this type."
+      ]
+    },
+    {
+      "index": 2,
+      "location": {
+        "line_0based": 6,
+        "line_1based": 7,
+        "character": 7
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module semmle.code.java.dataflow.FlowSources",
+      "hover_text": "**query_wrong_method**\n\n Error type: wrong method name (getParam vs getParameter)\n Error type: wrong predicate (getFoo doesn't exist on Method)",
+      "completions": [
+        "MyConfig",
+        "QlBuiltins"
+      ],
+      "source_snippet": "      6 | import semmle.code.java.dataflow.DataFlow\n>>>   7 | import semmle.code.java.dataflow.FlowSources\n      8 | ",
+      "candidate_fixes": [
+        "Replace with a valid member: MyConfig, QlBuiltins",
+        "The expected type is `wrong`. Make sure the predicate you're calling exists on this type."
+      ]
+    },
+    {
+      "index": 3,
+      "location": {
+        "line_0based": 26,
+        "line_1based": 27,
+        "character": 7
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module MyConfig::Flow",
+      "hover_text": "**MyConfig**",
+      "completions": [
+        "MyConfig",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     26 | \n>>>  27 | import MyConfig::Flow\n     28 | ",
+      "candidate_fixes": [
+        "Replace with a valid member: MyConfig, QlBuiltins"
+      ]
+    },
+    {
+      "index": 4,
+      "location": {
+        "line_0based": 8,
+        "line_1based": 9,
+        "character": 27
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [],
+      "source_snippet": "      8 | \n>>>   9 | module MyConfig implements DataFlow::ConfigSig {\n     10 |   predicate isSource(DataFlow::Node source) {",
+      "candidate_fixes": []
+    },
+    {
+      "index": 5,
+      "location": {
+        "line_0based": 9,
+        "line_1based": 10,
+        "character": 21
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "string",
+        "QlBuiltins",
+        "MyConfig"
+      ],
+      "source_snippet": "      9 | module MyConfig implements DataFlow::ConfigSig {\n>>>  10 |   predicate isSource(DataFlow::Node source) {\n     11 |     source instanceof RemoteFlowSource and",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, string"
+      ]
+    },
+    {
+      "index": 6,
+      "location": {
+        "line_0based": 10,
+        "line_1based": 11,
+        "character": 22
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve type RemoteFlowSource",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "string",
+        "QlBuiltins",
+        "MyConfig"
+      ],
+      "source_snippet": "     10 |   predicate isSource(DataFlow::Node source) {\n>>>  11 |     source instanceof RemoteFlowSource and\n     12 |     source.asExpr().(MethodAccess).getMethod().getName() = \"getParam\"",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, string"
+      ]
+    },
+    {
+      "index": 7,
+      "location": {
+        "line_0based": 11,
+        "line_1based": 12,
+        "character": 21
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve type MethodAccess",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "string",
+        "QlBuiltins",
+        "MyConfig"
+      ],
+      "source_snippet": "     11 |     source instanceof RemoteFlowSource and\n>>>  12 |     source.asExpr().(MethodAccess).getMethod().getName() = \"getParam\"\n     13 |     //                                                              ^^^^^^^^",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, string"
+      ]
+    },
+    {
+      "index": 8,
+      "location": {
+        "line_0based": 17,
+        "line_1based": 18,
+        "character": 19
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module DataFlow",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "string",
+        "QlBuiltins",
+        "MyConfig"
+      ],
+      "source_snippet": "     17 | \n>>>  18 |   predicate isSink(DataFlow::Node sink) {\n     19 |     exists(MethodCall mc |",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, string"
+      ]
+    },
+    {
+      "index": 9,
+      "location": {
+        "line_0based": 18,
+        "line_1based": 19,
+        "character": 11
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve type MethodCall",
+      "hover_text": "",
+      "completions": [
+        "sink",
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "string",
+        "any",
+        "none",
+        "QlBuiltins",
+        "MyConfig"
+      ],
+      "source_snippet": "     18 |   predicate isSink(DataFlow::Node sink) {\n>>>  19 |     exists(MethodCall mc |\n     20 |       mc.getMethod().getFoo() = \"executeQuery\" and",
+      "candidate_fixes": [
+        "Replace with a valid member: sink, boolean, date, float, int"
+      ]
+    },
+    {
+      "index": 10,
+      "location": {
+        "line_0based": 28,
+        "line_1based": 29,
+        "character": 5
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module MyConfig::Flow",
+      "hover_text": "**MyConfig**",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "string",
+        "MyConfig",
+        "QlBuiltins",
+        "where",
+        "select"
+      ],
+      "source_snippet": "     28 | \n>>>  29 | from MyConfig::Flow::PathNode source, MyConfig::Flow::PathNode sink\n     30 | where MyConfig::Flow::flowPath(source, sink)",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, string"
+      ]
+    },
+    {
+      "index": 11,
+      "location": {
+        "line_0based": 28,
+        "line_1based": 29,
+        "character": 38
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module MyConfig::Flow",
+      "hover_text": "**MyConfig**",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "string",
+        "MyConfig",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     28 | \n>>>  29 | from MyConfig::Flow::PathNode source, MyConfig::Flow::PathNode sink\n     30 | where MyConfig::Flow::flowPath(source, sink)",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, string"
+      ]
+    },
+    {
+      "index": 12,
+      "location": {
+        "line_0based": 29,
+        "line_1based": 30,
+        "character": 6
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module MyConfig::Flow",
+      "hover_text": "**MyConfig**",
+      "completions": [
+        "source",
+        "sink",
+        "any",
+        "none",
+        "MyConfig",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     29 | from MyConfig::Flow::PathNode source, MyConfig::Flow::PathNode sink\n>>>  30 | where MyConfig::Flow::flowPath(source, sink)\n     31 | select sink.getNode(), source, sink, \"$@ flows to $@\", source, \"source\", sink, \"sink\"",
+      "candidate_fixes": [
+        "Replace with a valid member: source, sink, any, none, MyConfig"
+      ]
+    }
+  ],
+  "warnings": [
+    {
+      "location": "Line 10:12",
+      "message": "unused predicate 'isSource'"
+    },
+    {
+      "location": "Line 18:12",
+      "message": "unused predicate 'isSink'"
+    }
+  ]
+}

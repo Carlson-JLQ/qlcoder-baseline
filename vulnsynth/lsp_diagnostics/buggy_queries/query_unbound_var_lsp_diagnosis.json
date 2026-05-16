@@ -1,0 +1,74 @@
+{
+  "query_path": "/root/VulnSynth/vulnsynth/lsp_diagnostics/buggy_queries/query_unbound_var.ql",
+  "lsp_clean": false,
+  "total_errors": 3,
+  "total_warnings": 0,
+  "errors": [
+    {
+      "index": 0,
+      "location": {
+        "line_0based": 4,
+        "line_1based": 5,
+        "character": 7
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve module java",
+      "hover_text": "",
+      "completions": [
+        "QlBuiltins"
+      ],
+      "source_snippet": "      4 |  */\n>>>   5 | import java\n      6 | ",
+      "candidate_fixes": [
+        "Replace with a valid member: QlBuiltins"
+      ]
+    },
+    {
+      "index": 1,
+      "location": {
+        "line_0based": 6,
+        "line_1based": 7,
+        "character": 5
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve type Method",
+      "hover_text": "",
+      "completions": [
+        "boolean",
+        "date",
+        "float",
+        "int",
+        "string",
+        "QlBuiltins",
+        "where",
+        "select"
+      ],
+      "source_snippet": "      6 | \n>>>   7 | from Method m, string name\n      8 | //             ^^^^^^^^^^^^ ERROR: 'string' type is not valid in from clause",
+      "candidate_fixes": [
+        "Replace with a valid member: boolean, date, float, int, string"
+      ]
+    },
+    {
+      "index": 2,
+      "location": {
+        "line_0based": 13,
+        "line_1based": 14,
+        "character": 16
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve variable x",
+      "hover_text": "",
+      "completions": [
+        "m",
+        "name",
+        "any",
+        "none",
+        "QlBuiltins"
+      ],
+      "source_snippet": "     13 |   m.isPublic()\n>>>  14 | select m, name, x\n     15 | //             ^ ERROR: 'x' is not bound",
+      "candidate_fixes": [
+        "Replace with a valid member: m, name, any, none, QlBuiltins"
+      ]
+    }
+  ],
+  "warnings": []
+}

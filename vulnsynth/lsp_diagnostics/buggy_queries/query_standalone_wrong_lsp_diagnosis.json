@@ -1,0 +1,177 @@
+{
+  "query_path": "/root/VulnSynth/vulnsynth/lsp_diagnostics/buggy_queries/query_standalone_wrong.ql",
+  "lsp_clean": false,
+  "total_errors": 7,
+  "total_warnings": 0,
+  "errors": [
+    {
+      "index": 0,
+      "location": {
+        "line_0based": 9,
+        "line_1based": 10,
+        "character": 17
+      },
+      "error_code": "unknown",
+      "message": "could not parse type name",
+      "hover_text": "",
+      "completions": [
+        "abs",
+        "acos",
+        "asin",
+        "atan",
+        "bitAnd",
+        "bitNot",
+        "bitOr",
+        "bitShiftLeft",
+        "bitShiftRight",
+        "bitShiftRightSigned"
+      ],
+      "source_snippet": "      9 |   //      ^^^^^^^^^ ERROR: 'toStringg' should be 'toString'\n>>>  10 |   x.strictconcat(y, x, y) and\n     11 |   //^^^^^^^^^^^ ERROR: strictconcat takes 2 args, not 3",
+      "candidate_fixes": [
+        "LSP suggests these valid alternatives: abs, acos, asin, atan, bitAnd",
+        "Review the CodeQL standard library documentation for the correct API at this position."
+      ]
+    },
+    {
+      "index": 1,
+      "location": {
+        "line_0based": 9,
+        "line_1based": 10,
+        "character": 2
+      },
+      "error_code": "expected_term",
+      "message": "expected a term but found an expression instead",
+      "hover_text": "**x**",
+      "completions": [
+        "x",
+        "y",
+        "any",
+        "none",
+        "QlBuiltins"
+      ],
+      "source_snippet": "      9 |   //      ^^^^^^^^^ ERROR: 'toStringg' should be 'toString'\n>>>  10 |   x.strictconcat(y, x, y) and\n     11 |   //^^^^^^^^^^^ ERROR: strictconcat takes 2 args, not 3",
+      "candidate_fixes": [
+        "LSP suggests these valid alternatives: x, y, any, none, QlBuiltins",
+        "LSP hover context: **x**",
+        "Review the CodeQL standard library documentation for the correct API at this position."
+      ]
+    },
+    {
+      "index": 2,
+      "location": {
+        "line_0based": 9,
+        "line_1based": 10,
+        "character": 4
+      },
+      "error_code": "unknown",
+      "message": "extraneous input 'strictconcat' expecting one of: '(', Lowerid",
+      "hover_text": "",
+      "completions": [
+        "abs",
+        "acos",
+        "asin",
+        "atan",
+        "bitAnd",
+        "bitNot",
+        "bitOr",
+        "bitShiftLeft",
+        "bitShiftRight",
+        "bitShiftRightSigned"
+      ],
+      "source_snippet": "      9 |   //      ^^^^^^^^^ ERROR: 'toStringg' should be 'toString'\n>>>  10 |   x.strictconcat(y, x, y) and\n     11 |   //^^^^^^^^^^^ ERROR: strictconcat takes 2 args, not 3",
+      "candidate_fixes": [
+        "LSP suggests these valid alternatives: abs, acos, asin, atan, bitAnd",
+        "Review the CodeQL standard library documentation for the correct API at this position."
+      ]
+    },
+    {
+      "index": 3,
+      "location": {
+        "line_0based": 9,
+        "line_1based": 10,
+        "character": 18
+      },
+      "error_code": "unknown",
+      "message": "unexpected input ',' expecting one of: '::'",
+      "hover_text": "",
+      "completions": [],
+      "source_snippet": "      9 |   //      ^^^^^^^^^ ERROR: 'toStringg' should be 'toString'\n>>>  10 |   x.strictconcat(y, x, y) and\n     11 |   //^^^^^^^^^^^ ERROR: strictconcat takes 2 args, not 3",
+      "candidate_fixes": [
+        "Review the CodeQL standard library documentation for the correct API at this position."
+      ]
+    },
+    {
+      "index": 4,
+      "location": {
+        "line_0based": 9,
+        "line_1based": 10,
+        "character": 24
+      },
+      "error_code": "unknown",
+      "message": "unexpected input ')' expecting one of: <EOF>, 'and', 'as', 'boolean', 'class', 'newtype', 'date', 'float', 'from', 'implies', 'import', 'in', 'instanceof', 'int', 'module', 'or', 'order', 'predicate', 'select', 'string', 'where', '<', '<=', '=', '>', '>=', '-', ',', '!=', '/', '.', '*', '%', '+', Lowerid, Upperid, Atlowerid, '/**'",
+      "hover_text": "**y**",
+      "completions": [],
+      "source_snippet": "      9 |   //      ^^^^^^^^^ ERROR: 'toStringg' should be 'toString'\n>>>  10 |   x.strictconcat(y, x, y) and\n     11 |   //^^^^^^^^^^^ ERROR: strictconcat takes 2 args, not 3",
+      "candidate_fixes": [
+        "LSP hover context: **y**",
+        "Review the CodeQL standard library documentation for the correct API at this position."
+      ]
+    },
+    {
+      "index": 5,
+      "location": {
+        "line_0based": 7,
+        "line_1based": 8,
+        "character": 8
+      },
+      "error_code": "cannot_resolve",
+      "message": "toStringg() cannot be resolved for type int",
+      "hover_text": "",
+      "completions": [
+        "abs",
+        "acos",
+        "asin",
+        "atan",
+        "bitAnd",
+        "bitNot",
+        "bitOr",
+        "bitShiftLeft",
+        "bitShiftRight",
+        "bitShiftRightSigned"
+      ],
+      "source_snippet": "      7 |   x = 42 and\n>>>   8 |   y = x.toStringg() and\n      9 |   //      ^^^^^^^^^ ERROR: 'toStringg' should be 'toString'",
+      "candidate_fixes": [
+        "Replace with a valid member: abs, acos, asin, atan, bitAnd",
+        "Did you mean `toString`? (closest match to `toStringg`)"
+      ]
+    },
+    {
+      "index": 6,
+      "location": {
+        "line_0based": 9,
+        "line_1based": 10,
+        "character": 17
+      },
+      "error_code": "cannot_resolve",
+      "message": "could not resolve type ",
+      "hover_text": "",
+      "completions": [
+        "abs",
+        "acos",
+        "asin",
+        "atan",
+        "bitAnd",
+        "bitNot",
+        "bitOr",
+        "bitShiftLeft",
+        "bitShiftRight",
+        "bitShiftRightSigned"
+      ],
+      "source_snippet": "      9 |   //      ^^^^^^^^^ ERROR: 'toStringg' should be 'toString'\n>>>  10 |   x.strictconcat(y, x, y) and\n     11 |   //^^^^^^^^^^^ ERROR: strictconcat takes 2 args, not 3",
+      "candidate_fixes": [
+        "Replace with a valid member: abs, acos, asin, atan, bitAnd"
+      ]
+    }
+  ],
+  "warnings": []
+}
