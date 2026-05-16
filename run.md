@@ -9,3 +9,5 @@
 
 /home/byteide/miniconda3/envs/qlcoder/bin/python vulnsynth/vulnsynth.py --cve-id CVE-2025-49009 --agent coco --model gpt-5.4
 /home/byteide/miniconda3/envs/qlcoder/bin/python vulnsynth/vulnsynth.py --cve-id CVE-2025-49656 --agent coco --model gpt-5.4
+
+/home/byteide/miniconda3/envs/qlcoder/bin/python vulnsynth/vulnsynth.py --cve-id CVE-2013-7285 --agent coco --model gpt-5.4

@@ -36,6 +36,7 @@ DEFAULT_MODEL_BY_AGENT = {
 try:
     from .agent_backends_vulnsynth import create_backend
     from .ast_extraction import run_phase2
+    from .component_repair_prompts import get_prompt_spec
     from .config import AST_CACHE, CODEQL_PATH, FIX_INFO, NVD_CACHE, get_chroma_client
     from .data_types import IterationResult, VulnAnalysisTask
     from .diff_preprocessor import process_diff_file
@@ -52,6 +53,7 @@ try:
 except ImportError:
     from agent_backends_vulnsynth import create_backend
     from ast_extraction import run_phase2
+    from component_repair_prompts import get_prompt_spec
     from config import AST_CACHE, CODEQL_PATH, FIX_INFO, NVD_CACHE, get_chroma_client
     from data_types import IterationResult, VulnAnalysisTask
     from diff_preprocessor import process_diff_file
@@ -65,6 +67,249 @@ except ImportError:
     from query_subagents_evaluation import compile_query_once, run_query_with_evaluation_results
     from repair_template_selector import select_components
     from utils import extract_last_agent_message, extract_phase1_sections, parse_phase1_json, render_phase1_json_markdown
+
+
+PROBLEM_COMPONENT_ORDER = ("source", "sink", "barrier", "flow")
+PROBLEM_COMPONENT_STATUS_SET = {
+    "missing_component",
+    "compile_failed",
+    "run_failed",
+    "empty",
+    "only_fixed",
+    "off_target",
+    "overblocking_suspect",
+    "non_discriminative",
+    "weak_but_present",
+    "weak_bridge",
+    "noisy_bridge",
+    "others",
+}
+TOP_HIT_LIMIT = 5
+SUPPORTING_FACTS_FIELD_REFERENCE_LINES = [
+    "- `present_in_query`: whether the current query explicitly contains this component.",
+    "- `compile_success`: whether the standalone component probe compiles successfully.",
+    "- `compile_error`: the compile error message for this component probe when compilation fails.",
+    "- `run.vulnerable`: execution facts for this component probe on the vulnerable database.",
+    "- `run.fixed`: execution facts for this component probe on the fixed database.",
+    "- `success`: whether execution on this side succeeds.",
+    "- `error`: runtime error message on this side when execution fails.",
+    "- `num_results`: total number of results returned on this side.",
+    "- `num_aligned_files`: how many hit files on this side overlap with target files.",
+    "- `num_aligned_methods`: how many hit methods on this side overlap with target methods.",
+    "- `aligned_files`: the overlapping target files found on this side.",
+    "- `aligned_methods`: the overlapping target methods found on this side.",
+    "- `target_file_coverage`: fraction of target files covered by this side (`num_aligned_files / total_target_files`).",
+    "- `target_method_coverage`: fraction of target methods covered by this side (`num_aligned_methods / total_target_methods`).",
+    "- `hit_files`: representative files hit by this probe on this side.",
+    "- `hit_methods`: representative methods hit by this probe on this side.",
+]
+SUPPORTING_FACTS_READ_GUIDANCE_LINES = [
+    "How to read Supporting Facts:",
+    "- For source/sink, alignment fields are usually the most important signal.",
+    "- For barrier/flow, result counts and cross-version comparison are usually more important than target alignment.",
+    "- Empty arrays or zero values do not necessarily mean the component is useless; interpret them together with Status and Facts abstract.",
+]
+FACTS_ABSTRACT_BY_STATUS = {
+    "missing_component": "The component is not present in the current query.",
+    "compile_failed": "The component exists in the query, but its standalone probe fails to compile.",
+    "run_failed": "The component compiles, but probe execution failed on at least one side.",
+    "empty": "The component produces no results on either vulnerable or fixed versions.",
+    "only_fixed": "The component only matches the fixed version, which suggests reversed modeling.",
+    "off_target": "The component has matches, but neither side aligns to target methods, indicating off-target modeling.",
+    "weak_but_present": "The component has some target alignment, but it still overlaps with the fixed side and is not yet stable enough.",
+    "overblocking_suspect": "The barrier suppresses far more vulnerable-side results than fixed-side results, which suggests overblocking.",
+    "non_discriminative": "The barrier matches both vulnerable and fixed versions, so it has weak discriminative value.",
+    "weak_bridge": "The flow component has bridge evidence, but it is still too weak to clearly support the intended path.",
+    "noisy_bridge": "The flow component produces many bridge facts on both sides, and the counts are close, suggesting noisy shared propagation.",
+    "others": "The component falls into an uncategorized abnormal state under the current evidence.",
+}
+COMMON_ALIGNMENT_RUN_FIELDS = [
+    "success",
+    "num_results",
+    "error",
+    "num_aligned_files",
+    "num_aligned_methods",
+    "aligned_files",
+    "aligned_methods",
+    "target_file_coverage",
+    "target_method_coverage",
+    "hit_files",
+    "hit_methods",
+]
+STATUS_SUPPORTING_FACTS_SPECS = {
+    "missing_component": {
+        "top": ["present_in_query"],
+    },
+    "compile_failed": {
+        "top": ["compile_success", "compile_error"],
+    },
+    "run_failed": {
+        "top": ["present_in_query", "compile_success"],
+        "run": ["success", "error"],
+    },
+    "empty": {
+        "top": ["present_in_query", "compile_success"],
+        "run": ["num_results"],
+    },
+    "only_fixed": {
+        "run": {
+            "vulnerable": ["num_results"],
+            "fixed": [
+                "num_results",
+                "num_aligned_files",
+                "num_aligned_methods",
+                "aligned_files",
+                "aligned_methods",
+                "target_file_coverage",
+                "target_method_coverage",
+                "hit_files",
+                "hit_methods",
+            ],
+        },
+    },
+    "off_target": {
+        "top": ["present_in_query", "compile_success", "compile_error"],
+        "run": COMMON_ALIGNMENT_RUN_FIELDS,
+    },
+    "weak_but_present": {
+        "top": ["present_in_query", "compile_success", "compile_error"],
+        "run": COMMON_ALIGNMENT_RUN_FIELDS,
+    },
+    "overblocking_suspect": {
+        "top": ["present_in_query", "compile_success", "compile_error"],
+        "run": COMMON_ALIGNMENT_RUN_FIELDS,
+    },
+    "non_discriminative": {
+        "top": ["present_in_query", "compile_success", "compile_error"],
+        "run": COMMON_ALIGNMENT_RUN_FIELDS,
+    },
+    "weak_bridge": {
+        "top": ["present_in_query", "compile_success", "compile_error"],
+        "run": COMMON_ALIGNMENT_RUN_FIELDS,
+    },
+    "noisy_bridge": {
+        "top": ["present_in_query", "compile_success", "compile_error"],
+        "run": COMMON_ALIGNMENT_RUN_FIELDS,
+    },
+    "others": {
+        "top": ["present_in_query", "compile_success", "compile_error"],
+        "run": COMMON_ALIGNMENT_RUN_FIELDS,
+    },
+}
+
+
+def _trim_problem_component_value(key: str, value: Any) -> Any:
+    if key in {"hit_files", "hit_methods"} and isinstance(value, list):
+        return value[:TOP_HIT_LIMIT]
+    return value
+
+
+def _ordered_prompt_problem_components(report: dict[str, Any]) -> list[dict[str, Any]]:
+    order = {role: idx for idx, role in enumerate(PROBLEM_COMPONENT_ORDER)}
+    items = [
+        item for item in (report.get("problem_components") or [])
+        if item.get("status") in PROBLEM_COMPONENT_STATUS_SET and item.get("role") in order
+    ]
+    return sorted(items, key=lambda item: order[item["role"]])
+
+
+def _render_repair_direction(role: str, status: str) -> str:
+    try:
+        return get_prompt_spec(role, status).prompt_text_en
+    except KeyError:
+        return (
+            f"The {role} component is marked as `{status}`. "
+            "Inspect the component facts and adjust only this component before considering broader query changes.\n"
+            "Do not rewrite the whole query."
+        )
+
+
+def _copy_selected_run_fields(side_report: dict[str, Any], fields: list[str]) -> dict[str, Any]:
+    selected: dict[str, Any] = {}
+    for field in fields:
+        if field in side_report:
+            selected[field] = _trim_problem_component_value(field, side_report[field])
+    return selected
+
+
+def _build_problem_component_supporting_facts(status: str, component: dict[str, Any]) -> dict[str, Any]:
+    spec = STATUS_SUPPORTING_FACTS_SPECS.get(status, STATUS_SUPPORTING_FACTS_SPECS["others"])
+    facts: dict[str, Any] = {}
+    for key in spec.get("top", []):
+        if key in component:
+            facts[key] = _trim_problem_component_value(key, component[key])
+
+    run_spec = spec.get("run")
+    run = component.get("run")
+    if isinstance(run_spec, list) and isinstance(run, dict):
+        run_facts: dict[str, Any] = {}
+        for side in ("vulnerable", "fixed"):
+            side_report = run.get(side)
+            if isinstance(side_report, dict):
+                selected = _copy_selected_run_fields(side_report, run_spec)
+                if selected:
+                    run_facts[side] = selected
+        if run_facts:
+            facts["run"] = run_facts
+    elif isinstance(run_spec, dict) and isinstance(run, dict):
+        run_facts = {}
+        for side in ("vulnerable", "fixed"):
+            fields = run_spec.get(side, [])
+            side_report = run.get(side)
+            if isinstance(side_report, dict) and fields:
+                selected = _copy_selected_run_fields(side_report, fields)
+                if selected:
+                    run_facts[side] = selected
+        if run_facts:
+            facts["run"] = run_facts
+
+    return facts
+
+
+def _render_problem_components_section(report: dict[str, Any]) -> str:
+    lines = ["## Problem Components", "", "## Supporting Facts Field Reference"]
+    lines.extend(SUPPORTING_FACTS_FIELD_REFERENCE_LINES)
+    lines.extend(["", *SUPPORTING_FACTS_READ_GUIDANCE_LINES, ""])
+
+    problem_components = _ordered_prompt_problem_components(report)
+    if not problem_components:
+        lines.extend(["- No problem components were selected.", ""])
+        return "\n".join(lines).rstrip() + "\n"
+
+    components = report.get("components", {})
+    for item in problem_components:
+        role = item["role"]
+        status = item["status"]
+        component = components.get(role, {})
+        repair_direction = _render_repair_direction(role, status)
+        facts_abstract = FACTS_ABSTRACT_BY_STATUS.get(status, FACTS_ABSTRACT_BY_STATUS["others"])
+        supporting_facts = _build_problem_component_supporting_facts(status, component)
+        lines.extend(
+            [
+                f"## {role}",
+                f"- Status: `{status}`",
+                "- Repair direction:",
+                *[f"  {line}" for line in repair_direction.splitlines()],
+                "- Facts abstract:",
+                f"  {facts_abstract}",
+                "- Supporting Facts",
+                "```json",
+                json.dumps(supporting_facts, ensure_ascii=False, indent=2),
+                "```",
+                "",
+            ]
+        )
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_probe_guided_feedback(report: dict[str, Any]) -> str:
+    return "\n\n".join(
+        [
+            "# Probe-Guided Repair Feedback",
+            _render_problem_components_section(report).strip(),
+        ]
+    )
 
 
 def _load_backend_config(config_path: Optional[str]) -> Dict[str, Any]:
@@ -469,13 +714,7 @@ class Vulnsynth_Agent_IterativeCLI:
             return "\n\n".join(
                 [
                     basic_feedback,
-                    "# Probe-Guided Repair Feedback",
-                    "",
-                    markdown_summary(probe_report).strip(),
-                    "",
-                    render_repair_summary(selection, repair_plan, Path(iteration_result.query_path)).strip(),
-                    "",
-                    render_selected_prompts(selection).strip(),
+                    _render_probe_guided_feedback(probe_report).strip(),
                 ]
             )
         except Exception as exc:

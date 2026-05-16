@@ -1,0 +1,539 @@
+# Phase 3 Query Refinement - Iteration 2
+
+
+## Environment Notes For Coco
+
+- This backend uses project-scoped MCP server names that are specific to VulnSynth:
+  - Chroma: `mcp__qlcoder_chroma__*`
+  - CodeQL LSP: `mcp__qlcoder_codeql__*`
+- Actual MCP availability depends on the current ablation mode; if a tool family is unavailable in this run, do not attempt to call it.
+- In full mode, stay inside repository tools + VulnSynth MCP tools; do not rely on web access, shell commands, or sub-agents.
+- Prefer `Read`, `Write`, `Glob`, and `Grep` for repository inspection.
+- Do not rely on stdin for task payloads; Phase 1 input is stored in `phase1_stdin.json`.
+
+
+**CRITICAL path usage**
+- Write tool `file_path`: `/home/byteide/research/qlcoder/output/vulnsynth_CVE-2025-49656_20260515_072659_gpt-5.4_full/results/CVE-2025-49656-query-iter-2.ql`
+- CodeQL MCP `file_uri`: `file:///home/byteide/research/qlcoder/output/vulnsynth_CVE-2025-49656_20260515_072659_gpt-5.4_full/results/CVE-2025-49656-query-iter-2.ql`
+- Always use the full absolute path.
+
+## Objective
+Refine the CodeQL query based on previous iteration feedback.
+
+## Previous Iteration Feedback
+## Iteration 1 Results
+
+## Previous Query
+```ql
+/**
+ * @name Apache Jena Fuseki dataset path traversal in admin dataset creation
+ * @description Detects Fuseki admin dataset/service names flowing into configuration path construction before the CVE-2025-49656 service-name validation was added.
+ * @problem.severity error
+ * @security-severity 8.1
+ * @precision high
+ * @tags security
+ *       external/cwe/cwe-022
+ * @kind path-problem
+ * @id java/apache-jena-fuseki-admin-dataset-path-traversal
+ */
+
+import java
+import semmle.code.java.dataflow.DataFlow
+import semmle.code.java.dataflow.TaintTracking
+
+private predicate isActionDatasetsCallable(Callable c) {
+  c.getDeclaringType().hasQualifiedName("org.apache.jena.fuseki.mgt", "ActionDatasets")
+}
+
+private predicate isConfigPathCall(MethodCall call) {
+  (
+    call.getMethod().hasName("generateConfigurationFilename") and
+    (
+      call.getMethod().getDeclaringType().hasQualifiedName("org.apache.jena.fuseki.webapp", "FusekiWebapp") or
+      call.getMethod().getDeclaringType().hasQualifiedName("org.apache.jena.fuseki.mgt", "FusekiServerCtl")
+    )
+  )
+  or
+  (
+    call.getMethod().hasName("existingConfigurationFile") and
+    (
+      call.getMethod().getDeclaringType().hasQualifiedName("org.apache.jena.fuseki.webapp", "FusekiWebapp") or
+      call.getMethod().getDeclaringType().hasQualifiedName("org.apache.jena.fuseki.mgt", "FusekiServerCtl")
+    )
+  )
+}
+
+private predicate hasFixedValidation(Callable c) {
+  exists(MethodCall call |
+    call.getEnclosingCallable() = c and
+    (
+      (
+        call.getMethod().hasName("serviceName") and
+        call.getMethod().getDeclaringType().hasQualifiedName("org.apache.jena.fuseki.server", "Validators")
+      )
+      or
+      call.getMethod().hasName("isValidServiceName")
+      or
+      (
+        call.getMethod().hasName("allowConfigFiles") and
+        (
+          call.getMethod().getDeclaringType().hasQualifiedName("org.apache.jena.fuseki.webapp", "FusekiWebapp") or
+          call.getMethod().getDeclaringType().hasQualifiedName("org.apache.jena.fuseki.mgt", "FusekiAdmin")
+        )
+      )
+    )
+  )
+}
+
+class RequestDatasetNameSource extends DataFlow::Node {
+  RequestDatasetNameSource() {
+    exists(MethodCall call |
+      call.getMethod().hasName("getRequestParameter") and
+      call.getMethod().getDeclaringType().hasQualifiedName("org.apache.jena.fuseki.servlets", "HttpAction") and
+      isActionDatasetsCallable(call.getEnclosingCallable()) and
+      (
+        exists(StringLiteral lit |
+          lit = call.getArgument(0) and
+          lit.getValue() = "dbName"
+        )
+        or
+        call.getArgument(0).(VarAccess).getVariable().hasName("paramDatasetName")
+      ) and
+      this.asExpr() = call
+    )
+  }
+}
+
+class ServiceLiteralSource extends DataFlow::Node {
+  ServiceLiteralSource() {
+    exists(MethodCall call |
+      call.getMethod().hasName("getLexicalForm") and
+      call.getMethod().getDeclaringType().hasQualifiedName("org.apache.jena.rdf.model", "Literal") and
+      isActionDatasetsCallable(call.getEnclosingCallable()) and
+      this.asExpr() = call
+    )
+  }
+}
+
+class Source extends DataFlow::Node {
+  Source() {
+    this instanceof RequestDatasetNameSource or
+    this instanceof ServiceLiteralSource
+  }
+}
+
+class Sink extends DataFlow::Node {
+  Sink() {
+    exists(MethodCall call |
+      isConfigPathCall(call) and
+      isActionDatasetsCallable(call.getEnclosingCallable()) and
+      call.getEnclosingCallable().getName() = "execPostContainer" and
+      this.asExpr() = call.getArgument(0)
+    )
+  }
+}
+
+class Sanitizer extends DataFlow::Node {
+  Sanitizer() {
+    exists(MethodCall call |
+      call.getMethod().hasName("serviceName") and
+      call.getMethod().getDeclaringType().hasQualifiedName("org.apache.jena.fuseki.server", "Validators") and
+      this.asExpr() = call.getArgument(0)
+    )
+    or
+    exists(MethodCall call |
+      call.getMethod().hasName("isValidServiceName") and
+      this.asExpr() = call.getArgument(0)
+    )
+  }
+}
+
+module FusekiDatasetPathTraversalConfig implements DataFlow::ConfigSig {
+  predicate isSource(DataFlow::Node source) { source instanceof Source }
+
+  predicate isSink(DataFlow::Node sink) { sink instanceof Sink }
+
+  predicate isBarrier(DataFlow::Node node) { node instanceof Sanitizer }
+
+  predicate isAdditionalFlowStep(DataFlow::Node n1, DataFlow::Node n2) {
+    exists(MethodCall call |
+      call.getMethod().hasName("canonical") and
+      call.getMethod().getDeclaringType().hasQualifiedName("org.apache.jena.fuseki.server", "DataAccessPoint") and
+      n1.asExpr() = call.getArgument(0) and
+      n2.asExpr() = call
+    )
+    or
+    exists(MethodCall call |
+      call.getMethod().hasName("substring") and
+      call.getMethod().getDeclaringType() instanceof TypeString and
+      n1.asExpr() = call.getQualifier() and
+      n2.asExpr() = call
+    )
+  }
+}
+
+module FusekiDatasetPathTraversalFlow = TaintTracking::Global<FusekiDatasetPathTraversalConfig>;
+
+import FusekiDatasetPathTraversalFlow::PathGraph
+
+from
+  FusekiDatasetPathTraversalFlow::PathNode source,
+  FusekiDatasetPathTraversalFlow::PathNode sink,
+  Callable c
+where
+  FusekiDatasetPathTraversalFlow::flowPath(source, sink) and
+  c = sink.getNode().asExpr().getEnclosingCallable() and
+  isActionDatasetsCallable(c) and
+  c.getName() = "execPostContainer" and
+  not hasFixedValidation(c)
+select
+  sink.getNode(),
+  source,
+  sink,
+  "User-controlled Fuseki dataset or service names reach configuration path construction without the CVE-2025-49656 service-name validation.",
+  source.getNode(),
+  "user-controlled dataset or service name"
+
+```
+
+## Compilation Results
+COMPILATION SUCCESS: Query syntax is valid
+
+## Execution Results
+## Query Evaluation Summary (Iteration 1)
+Results: Vulnerable=0, Fixed=0
+Method Recall: Vulnerable=False, Fixed=False
+True Positive Methods: Vulnerable=0, Fixed=0
+Coverage: 0/10 target methods
+MISS: Query does not hit any target vulnerable methods
+Method location format is path/to/hit/file.java:Class:Method
+Missed target methods:
+  - jena-fuseki2/jena-fuseki-webapp/src/main/java/org/apache/jena/fuseki/mgt/ActionDatasets.java:ActionDatasets:execDeleteItem
+  - jena-fuseki2/jena-fuseki-webapp/src/main/java/org/apache/jena/fuseki/webapp/FusekiWebapp.java:FusekiWebapp:makePath
+  - jena-fuseki2/jena-fuseki-webapp/src/main/java/org/apache/jena/fuseki/mgt/ActionDatasets.java:ActionDatasets:findService
+  - jena-fuseki2/jena-fuseki-webapp/src/main/java/org/apache/jena/fuseki/mgt/ActionDatasets.java:ActionDatasets:execPostContainer
+  - jena-fuseki2/jena-fuseki-webapp/src/main/java/org/apache/jena/fuseki/webapp/FusekiWebapp.java:FusekiWebapp:allowConfigFiles
+  - jena-fuseki2/jena-fuseki-webapp/src/main/java/org/apache/jena/fuseki/mgt/ActionDatasets.java:ActionDatasets:execGetItem
+  - jena-fuseki2/jena-fuseki-webapp/src/main/java/org/apache/jena/fuseki/mgt/ActionDatasets.java:ActionDatasets:execPostItem
+  - jena-fuseki2/jena-fuseki-webapp/src/main/java/org/apache/jena/fuseki/mgt/ActionDatasets.java:ActionDatasets:assemblerFromBody
+  - jena-fuseki2/jena-fuseki-webapp/src/main/java/org/apache/jena/fuseki/mgt/ActionDatasets.java:ActionDatasets:bodyAsGraph
+  - jena-fuseki2/jena-fuseki-webapp/src/main/java/org/apache/jena/fuseki/webapp/FusekiWebapp.java:FusekiWebapp:generateConfigurationFilename
+
+## Next Steps
+Improve vulnerable target coverage; the query is not hitting expected vulnerable methods.
+
+# Probe-Guided Repair Feedback
+
+
+
+# Probe Evaluation Summary
+
+- CVE: `CVE-2025-49656`
+- Query: `/home/byteide/research/qlcoder/output/vulnsynth_CVE-2025-49656_20260515_072659_gpt-5.4_full/results/CVE-2025-49656-query-iter-1.ql`
+- Probe dir: `output/vulnsynth_CVE-2025-49656_20260515_072659_gpt-5.4_full/results/repair_iter_1/probe_evaluation`
+- Target files: `2`
+- Target methods: `10`
+
+## Problem Components
+
+## Supporting Facts Field Reference
+- `present_in_query`: whether the current query explicitly contains this component.
+- `compile_success`: whether the standalone component probe compiles successfully.
+- `compile_error`: the compile error message for this component probe when compilation fails.
+- `run.vulnerable`: execution facts for this component probe on the vulnerable database.
+- `run.fixed`: execution facts for this component probe on the fixed database.
+- `success`: whether execution on this side succeeds.
+- `error`: runtime error message on this side when execution fails.
+- `num_results`: total number of results returned on this side.
+- `num_aligned_files`: how many hit files on this side overlap with target files.
+- `num_aligned_methods`: how many hit methods on this side overlap with target methods.
+- `aligned_files`: the overlapping target files found on this side.
+- `aligned_methods`: the overlapping target methods found on this side.
+- `target_file_coverage`: fraction of target files covered by this side (`num_aligned_files / total_target_files`).
+- `target_method_coverage`: fraction of target methods covered by this side (`num_aligned_methods / total_target_methods`).
+- `hit_files`: representative files hit by this probe on this side.
+- `hit_methods`: representative methods hit by this probe on this side.
+
+How to read Supporting Facts:
+- For source/sink, alignment fields are usually the most important signal.
+- For barrier/flow, result counts and cross-version comparison are usually more important than target alignment.
+- Empty arrays or zero values do not necessarily mean the component is useless; interpret them together with Status and Facts abstract.
+
+## source
+- Status: `off_target`
+- Repair direction:
+  The source probe has matches, but it does not behave like a target-aligned vulnerable-side source.
+  Treat this as off-target source modeling and replace the current source body first.
+  Prefer replacing broad utility-like sources with target-adjacent entry points.
+  Do not rewrite the whole query.
+- Facts abstract:
+  The component has matches, but neither side aligns to target methods, indicating off-target modeling.
+- Supporting Facts
+```json
+{
+  "present_in_query": true,
+  "compile_success": true,
+  "compile_error": null,
+  "run": {
+    "vulnerable": {
+      "success": true,
+      "num_results": 2,
+      "error": null,
+      "num_aligned_files": 0,
+      "num_aligned_methods": 0,
+      "aligned_files": [],
+      "aligned_methods": [],
+      "target_file_coverage": 0.0,
+      "target_method_coverage": 0.0,
+      "hit_files": [
+        "jena-arq/src/main/java/org/apache/jena/sparql/core/assembler/AssemblerUtils.java",
+        "jena-arq/src/main/java/org/apache/jena/sparql/util/ResultSetUtils.java",
+        "jena-arq/src/test/java/org/apache/jena/arq/junit/LibTestSetup.java",
+        "jena-arq/src/test/java/org/apache/jena/arq/junit/manifest/Manifest.java",
+        "jena-arq/src/test/java/org/apache/jena/sparql/api/TestAPI.java"
+      ],
+      "hit_methods": [
+        "jena-arq/src/main/java/org/apache/jena/sparql/core/assembler/AssemblerUtils.java:AssemblerUtils:mergeContext",
+        "jena-arq/src/main/java/org/apache/jena/sparql/util/ResultSetUtils.java:ResultSetUtils:resultSetToStringList",
+        "jena-arq/src/test/java/org/apache/jena/arq/junit/LibTestSetup.java:LibTestSetup:getLiteral",
+        "jena-arq/src/test/java/org/apache/jena/arq/junit/LibTestSetup.java:LibTestSetup:getLiteralOrURI",
+        "jena-arq/src/test/java/org/apache/jena/arq/junit/manifest/Manifest.java:Manifest:getLiteral"
+      ]
+    },
+    "fixed": {
+      "success": true,
+      "num_results": 2,
+      "error": null,
+      "num_aligned_files": 0,
+      "num_aligned_methods": 0,
+      "aligned_files": [],
+      "aligned_methods": [],
+      "target_file_coverage": 0.0,
+      "target_method_coverage": 0.0,
+      "hit_files": [
+        "jena-arq/src/main/java/org/apache/jena/sparql/core/assembler/AssemblerUtils.java",
+        "jena-arq/src/main/java/org/apache/jena/sparql/util/ResultSetUtils.java",
+        "jena-arq/src/test/java/org/apache/jena/arq/junit/LibTestSetup.java",
+        "jena-arq/src/test/java/org/apache/jena/arq/junit/manifest/Manifest.java",
+        "jena-arq/src/test/java/org/apache/jena/sparql/api/TestAPI.java"
+      ],
+      "hit_methods": [
+        "jena-arq/src/main/java/org/apache/jena/sparql/core/assembler/AssemblerUtils.java:AssemblerUtils:mergeContext",
+        "jena-arq/src/main/java/org/apache/jena/sparql/util/ResultSetUtils.java:ResultSetUtils:resultSetToStringList",
+        "jena-arq/src/test/java/org/apache/jena/arq/junit/LibTestSetup.java:LibTestSetup:getLiteral",
+        "jena-arq/src/test/java/org/apache/jena/arq/junit/LibTestSetup.java:LibTestSetup:getLiteralOrURI",
+        "jena-arq/src/test/java/org/apache/jena/arq/junit/manifest/Manifest.java:Manifest:getLiteral"
+      ]
+    }
+  }
+}
+```
+
+## sink
+- Status: `off_target`
+- Repair direction:
+  The sink probe has matches, but it does not behave like a target-aligned dangerous operation.
+  Treat this as off-target sink modeling and replace the current sink body first.
+  Prefer replacing broad sink logic with target-adjacent dangerous operations.
+  Do not rewrite the whole query.
+- Facts abstract:
+  The component has matches, but neither side aligns to target methods, indicating off-target modeling.
+- Supporting Facts
+```json
+{
+  "present_in_query": true,
+  "compile_success": true,
+  "compile_error": null,
+  "run": {
+    "vulnerable": {
+      "success": true,
+      "num_results": 2,
+      "error": null,
+      "num_aligned_files": 1,
+      "num_aligned_methods": 0,
+      "aligned_files": [
+        "jena-fuseki2/jena-fuseki-webapp/src/main/java/org/apache/jena/fuseki/webapp/FusekiWebapp.java"
+      ],
+      "aligned_methods": [],
+      "target_file_coverage": 0.5,
+      "target_method_coverage": 0.0,
+      "hit_files": [
+        "jena-arq/src/main/java/org/apache/jena/riot/RDFDataMgr.java",
+        "jena-arq/src/main/java/org/apache/jena/riot/RDFWriterBuilder.java",
+        "jena-arq/src/main/java/org/apache/jena/riot/adapters/RDFWriterRIOT.java",
+        "jena-arq/src/main/java/org/apache/jena/riot/protobuf/ProtobufRDF.java",
+        "jena-arq/src/main/java/org/apache/jena/riot/thrift/ThriftRDF.java"
+      ],
+      "hit_methods": [
+        "jena-arq/src/main/java/org/apache/jena/riot/RDFDataMgr.java:RDFDataMgr:write$",
+        "jena-arq/src/main/java/org/apache/jena/riot/RDFWriterBuilder.java:RDFWriterBuilder:output",
+        "jena-arq/src/main/java/org/apache/jena/riot/adapters/RDFWriterRIOT.java:RDFWriterRIOT:write",
+        "jena-arq/src/main/java/org/apache/jena/riot/protobuf/ProtobufRDF.java:ProtobufRDF:streamToFile",
+        "jena-arq/src/main/java/org/apache/jena/riot/thrift/ThriftRDF.java:ThriftRDF:streamToFile"
+      ]
+    },
+    "fixed": {
+      "success": true,
+      "num_results": 2,
+      "error": null,
+      "num_aligned_files": 0,
+      "num_aligned_methods": 0,
+      "aligned_files": [],
+      "aligned_methods": [],
+      "target_file_coverage": 0.0,
+      "target_method_coverage": 0.0,
+      "hit_files": [
+        "jena-arq/src/main/java/org/apache/jena/riot/RDFDataMgr.java",
+        "jena-arq/src/main/java/org/apache/jena/riot/RDFWriterBuilder.java",
+        "jena-arq/src/main/java/org/apache/jena/riot/adapters/RDFWriterRIOT.java",
+        "jena-arq/src/main/java/org/apache/jena/riot/protobuf/ProtobufRDF.java",
+        "jena-arq/src/main/java/org/apache/jena/riot/thrift/ThriftRDF.java"
+      ],
+      "hit_methods": [
+        "jena-arq/src/main/java/org/apache/jena/riot/RDFDataMgr.java:RDFDataMgr:write$",
+        "jena-arq/src/main/java/org/apache/jena/riot/RDFWriterBuilder.java:RDFWriterBuilder:output",
+        "jena-arq/src/main/java/org/apache/jena/riot/adapters/RDFWriterRIOT.java:RDFWriterRIOT:write",
+        "jena-arq/src/main/java/org/apache/jena/riot/protobuf/ProtobufRDF.java:ProtobufRDF:streamToFile",
+        "jena-arq/src/main/java/org/apache/jena/riot/thrift/ThriftRDF.java:ThriftRDF:streamToFile"
+      ]
+    }
+  }
+}
+```
+
+## barrier
+- Status: `non_discriminative`
+- Repair direction:
+  The barrier matches both vulnerable and fixed versions with weak discrimination.
+  Do not treat it as a main detection signal.
+  Try to specialize the barrier toward fixed-side validation or sanitization logic; if that is not possible, gently narrow generic barrier conditions.
+- Facts abstract:
+  The barrier matches both vulnerable and fixed versions, so it has weak discriminative value.
+- Supporting Facts
+```json
+{
+  "present_in_query": true,
+  "compile_success": true,
+  "compile_error": null,
+  "run": {
+    "vulnerable": {
+      "success": true,
+      "num_results": 19,
+      "error": null,
+      "num_aligned_files": 0,
+      "num_aligned_methods": 0,
+      "aligned_files": [],
+      "aligned_methods": [],
+      "target_file_coverage": 0.0,
+      "target_method_coverage": 0.0,
+      "hit_files": [],
+      "hit_methods": []
+    },
+    "fixed": {
+      "success": true,
+      "num_results": 19,
+      "error": null,
+      "num_aligned_files": 0,
+      "num_aligned_methods": 0,
+      "aligned_files": [],
+      "aligned_methods": [],
+      "target_file_coverage": 0.0,
+      "target_method_coverage": 0.0,
+      "hit_files": [],
+      "hit_methods": []
+    }
+  }
+}
+```
+
+## flow
+- Status: `noisy_bridge`
+- Repair direction:
+  The current additional flow-step logic produces many shared edges on both vulnerable and fixed versions.
+  Treat this as noisy bridge modeling.
+  Narrow the flow by adding stronger type, receiver, method-name, or argument-position constraints, and keep only target-adjacent propagation edges.
+  Do not rewrite the whole query.
+- Facts abstract:
+  The flow component produces many bridge facts on both sides, and the counts are close, suggesting noisy shared propagation.
+- Supporting Facts
+```json
+{
+  "present_in_query": true,
+  "compile_success": true,
+  "compile_error": null,
+  "run": {
+    "vulnerable": {
+      "success": true,
+      "num_results": 644,
+      "error": null,
+      "num_aligned_files": 0,
+      "num_aligned_methods": 0,
+      "aligned_files": [],
+      "aligned_methods": [],
+      "target_file_coverage": 0.0,
+      "target_method_coverage": 0.0,
+      "hit_files": [],
+      "hit_methods": []
+    },
+    "fixed": {
+      "success": true,
+      "num_results": 648,
+      "error": null,
+      "num_aligned_files": 0,
+      "num_aligned_methods": 0,
+      "aligned_files": [],
+      "aligned_methods": [],
+      "target_file_coverage": 0.0,
+      "target_method_coverage": 0.0,
+      "hit_files": [],
+      "hit_methods": []
+    }
+  }
+}
+```
+
+## Collection Name
+`cve_analysis_cve_2025_49656_2034377_20260515_072959`
+
+## Task
+1. Analyze what went wrong in the previous iteration.
+2. Retrieve the Phase 1 sections from `cve_analysis_cve_2025_49656_2034377_20260515_072959`.
+3. Retrieve vulnerable and fixed AST from `cve_ast_cache`.
+4. Update the query with `Write`.
+5. Validate with:
+   - `mcp__qlcoder_codeql__codeql_update_file`
+   - `mcp__qlcoder_codeql__codeql_diagnostics`
+   - `mcp__qlcoder_codeql__codeql_hover`
+   - `mcp__qlcoder_codeql__codeql_complete`
+   - `mcp__qlcoder_codeql__codeql_definition`
+   - `mcp__qlcoder_codeql__codeql_references`
+   - `mcp__qlcoder_codeql__codeql_format`
+6. Save the final query again with `Write`.
+
+## Important Reminders
+- Keep the query in `@kind path-problem` form
+- Improve the existing logic rather than replacing it with a much simpler query
+- The query should find true positives in the vulnerable database and avoid true positives in the fixed database
+- Do not call `mcp__qlcoder_chroma__chroma_list_collections`
+
+## Completion Checklist
+- The final `.ql` file is saved with `Write`
+- `mcp__qlcoder_codeql__codeql_diagnostics` reports no blocking errors
+- The final response contains only the exact absolute path line
+
+
+## CRITICAL: STOP EXECUTION IMMEDIATELY
+
+**MANDATORY**: Once you have successfully written a `.ql` query file, you MUST STOP execution immediately and provide the file path.
+
+**REQUIRED FINAL OUTPUT**: After writing the `.ql` file, your last message must be:
+```
+QUERY_FILE_PATH: /home/byteide/research/qlcoder/output/vulnsynth_CVE-2025-49656_20260515_072659_gpt-5.4_full/results/CVE-2025-49656-query-iter-2.ql
+```
+
+The automated system will take over to:
+- Compile the query
+- Test it on both databases
+- Provide feedback for the next iteration
+
+**STOP AS SOON AS THE `.ql` FILE IS WRITTEN** - This prevents context window bloat and enables iterative refinement.
