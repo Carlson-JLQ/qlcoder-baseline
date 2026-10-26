@@ -211,4 +211,7 @@ output/*
 !output/.gitkeep
 chroma_db/*
 cves/*
-codeql-lsp-mcp/
+
+data/chroma_db
+codeql-lsp-mcp/node_modules/
+cwe-bench-java/
