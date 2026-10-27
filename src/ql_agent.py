@@ -18,10 +18,6 @@ from query_subagents_evaluation import EvaluationCalculator
 import argparse
 from datetime import datetime 
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
-MODELS = {
-    'sonnet-4': "claude-sonnet-4-20250514",
-    'sonnet-4.5': "claude-sonnet-4-5-20250929"
-}
 try:
     from .utils import save_output_to_chroma, extract_phase1_sections
     from .data_types import VulnAnalysisTask
@@ -767,24 +763,33 @@ class QLAgentIterative:
             
             # Calculate totals
             total_cost = 0.0
+            total_reported_cost = 0.0
             total_input_tokens = 0
             total_cache_creation = 0
             total_cache_read = 0
             total_output_tokens = 0
-            
+            cost_sources = set()
+
             for usage in [phase1_usage, phase2_usage] + [iter_data[1] for iter_data in phase3_iterations]:
                 if usage:
                     total_cost += usage.get("total_cost_usd", 0)
+                    total_reported_cost += usage.get("reported_cost_usd", 0)
                     total_input_tokens += usage.get("total_input_tokens", 0)
                     total_cache_creation += usage.get("total_cache_creation_tokens", 0)
                     total_cache_read += usage.get("total_cache_read_tokens", 0)
                     total_output_tokens += usage.get("total_output_tokens", 0)
-            
+                    if usage.get("cost_source"):
+                        cost_sources.add(usage["cost_source"])
+
             # Create summary report
             with open(summary_path, 'w') as f:
                 f.write(f"# Token Usage Summary for {cve_id}\n\n")
                 f.write(f"**Total Cost**: ${total_cost:.6f}\n")
-                f.write(f"**Total Input Tokens**: {total_input_tokens:,}\n") 
+                if total_reported_cost and abs(total_reported_cost - total_cost) > 1e-9:
+                    f.write(f"**CLI-Reported Cost** (not used): ${total_reported_cost:.6f}\n")
+                if cost_sources:
+                    f.write(f"**Cost Source**: {', '.join(sorted(cost_sources))}\n")
+                f.write(f"**Total Input Tokens**: {total_input_tokens:,}\n")
                 f.write(f"**Total Cache Creation Tokens**: {total_cache_creation:,}\n")
                 f.write(f"**Total Cache Read Tokens**: {total_cache_read:,}\n")
                 f.write(f"**Total Output Tokens**: {total_output_tokens:,}\n")
@@ -810,7 +815,8 @@ class QLAgentIterative:
 
             
             self.logger.info(f"Created comprehensive cost summary: {summary_path}")
-            self.logger.info(f"Total actual cost: ${total_cost:.6f} across {1 + (1 if phase2_usage else 0) + len(phase3_iterations)} phases")
+            self.logger.info(f"Total API cost: ${total_cost:.6f} ({', '.join(sorted(cost_sources)) or 'none'}) "
+                             f"across {1 + (1 if phase2_usage else 0) + len(phase3_iterations)} phases")
             
         except Exception as e:
             self.logger.error(f"Failed to create cost usage summary: {e}")
@@ -827,12 +833,14 @@ class QLAgentIterative:
         # Calculate actual token usage from API data in metrics files
         output_dir = result["output_dir"]
         total_cost = 0.0
+        total_reported_cost = 0.0
         total_input_tokens = 0
         total_cache_creation_tokens = 0
         total_cache_read_tokens = 0
         total_output_tokens = 0
+        cost_sources = set()
         phase_tokens = {}
-        
+
         # Parse actual API usage from metrics files
         for file_name in os.listdir(output_dir):
             if file_name.endswith("_metrics.json"):
@@ -841,26 +849,32 @@ class QLAgentIterative:
                     with open(file_path, 'r') as f:
                         metrics = json.load(f)
                         api_usage = metrics.get("api_usage", {})
-                        
+
                     if api_usage and (api_usage.get("total_cost_usd", 0) > 0 or api_usage.get("total_input_tokens", 0) > 0):
                         # Extract real API usage data
                         phase_cost = api_usage.get("total_cost_usd", 0)
+                        phase_reported_cost = api_usage.get("reported_cost_usd", 0)
                         phase_input = api_usage.get("total_input_tokens", 0)
                         phase_cache_creation = api_usage.get("total_cache_creation_tokens", 0)
                         phase_cache_read = api_usage.get("total_cache_read_tokens", 0)
                         phase_output = api_usage.get("total_output_tokens", 0)
                         phase_total_tokens = phase_input + phase_cache_creation + phase_cache_read + phase_output
-                        
+
                         # Accumulate totals
                         total_cost += phase_cost
+                        total_reported_cost += phase_reported_cost
                         total_input_tokens += phase_input
                         total_cache_creation_tokens += phase_cache_creation
                         total_cache_read_tokens += phase_cache_read
                         total_output_tokens += phase_output
-                        
+                        if api_usage.get("cost_source"):
+                            cost_sources.add(api_usage["cost_source"])
+
                         # Store phase breakdown
                         phase_tokens[file_name] = {
                             "cost_usd": phase_cost,
+                            "reported_cost_usd": phase_reported_cost,
+                            "cost_source": api_usage.get("cost_source"),
                             "input_tokens": phase_input,
                             "cache_creation_tokens": phase_cache_creation,
                             "cache_read_tokens": phase_cache_read,
@@ -888,6 +902,8 @@ class QLAgentIterative:
                 "collection_name": collection_name,
                 "api_usage_summary": {
                     "total_cost_usd": total_cost,
+                    "cli_reported_cost_usd": total_reported_cost,
+                    "cost_source": ", ".join(sorted(cost_sources)) if cost_sources else "none",
                     "total_input_tokens": total_input_tokens,
                     "total_cache_creation_tokens": total_cache_creation_tokens,
                     "total_cache_read_tokens": total_cache_read_tokens,
@@ -927,7 +943,8 @@ class QLAgentIterative:
             json.dump(metadata, f, indent=2)
         
         self.logger.info(f"Saved metadata: {metadata_path}")
-        self.logger.info(f"Real API cost: ${total_cost:.6f}")
+        self.logger.info(f"API cost: ${total_cost:.6f} (source: {', '.join(sorted(cost_sources)) or 'none'}"
+                         + (f", CLI reported ${total_reported_cost:.6f}" if total_reported_cost else "") + ")")
         self.logger.info(f"Total effective tokens: {total_effective_tokens:,} (input: {total_input_tokens:,}, cache: {total_cache_read_tokens:,}, output: {total_output_tokens:,})")
         self.logger.info(f"Completed {result['total_iterations']} iterations")
 
@@ -966,7 +983,7 @@ class QLAgentIterativeCLI:
                                    diff_file: str = None, 
                                    output_dir: str = None, max_iteration: int = 5,
                                    cache_phase_output: bool = True,
-                                   model: str = "sonnet-4") -> None:
+                                   model: str = "sonnet-4") -> bool:
         
         # Auto-discover paths if not provided
         if not all([vuln_db, fixed_db, diff_file]):
@@ -978,14 +995,14 @@ class QLAgentIterativeCLI:
                 print(f"Auto-discovered paths for {cve_id}")
             except FileNotFoundError as e:
                 print(f"{e}")
-                return
+                return False
         
         try:
             with open(diff_file, 'r') as f:
                 diff_content = f.read()
         except Exception as e:
             print(f"Failed to read diff file: {e}")
-            return
+            return False
         
         task = VulnAnalysisTask(
             vuln_db_path=vuln_db,
@@ -1026,10 +1043,12 @@ class QLAgentIterativeCLI:
             print(f"Total iterations: {result['total_iterations']}")
             if result.get("final_query"):
                 print(f"Final query: {result['final_query']}")
+            return True
         else:
             print("Iterative analysis failed!")
             print(f"Error: {result.get('error')}")
             print(f"Completed iterations: {result.get('total_iterations', 0)}")
+            return False
 
 
 async def main():
@@ -1048,7 +1067,8 @@ async def main():
     parser.add_argument("--cache-phase-output", action="store_true", default=True)
     parser.add_argument("--no-cache-phase-output", dest="cache_phase_output", action="store_false")
     parser.add_argument("--model", default="sonnet-4",
-                        choices=["sonnet-4", "sonnet-4.5", "gemini-2.5-pro", "gemini-2.5-flash","gpt-5"])
+                        choices=["sonnet-4", "sonnet-4.5", "deepseek-v4.1-flash-itkk",
+                                 "gemini-2.5-pro", "gemini-2.5-flash", "gpt-5"])
     parser.add_argument("--agent", default="claude", choices=["claude", "gemini", "codex"],
                         help="Agent backend to use")
     parser.add_argument("--ablation-mode", default="full",
@@ -1059,7 +1079,7 @@ async def main():
 
     cli = QLAgentIterativeCLI(agent_type=args.agent, model=args.model,
                               ablation_mode=args.ablation_mode)
-    await cli.analyze_vulnerability(
+    success = await cli.analyze_vulnerability(
         cve_id=args.cve_id,
         vuln_db=args.vuln_db,
         fixed_db=args.fixed_db,
@@ -1068,6 +1088,8 @@ async def main():
         max_iteration=args.max_iteration,
         model=args.model
     )
+    if not success:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

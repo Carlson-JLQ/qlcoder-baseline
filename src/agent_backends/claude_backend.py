@@ -9,6 +9,10 @@ from typing import Dict, Optional
 from . import AgentBackend
 from src.config import CHROMA_DB_PATH, CHROMA_AUTH_TOKEN, CHROMA_HOST, CHROMA_PORT, CODEQL_LSP_MCP_PATH
 from . import claude_prompts as prompts
+try:
+    from src.pricing import compute_cost
+except ImportError:
+    from pricing import compute_cost
 
 # Ablation modes that skip Chroma MCP setup
 _NO_CHROMA_MODES = ("no_tools",)
@@ -18,6 +22,9 @@ _NO_LSP_MODES = ("no_tools", "no_lsp")
 MODELS = {
     "sonnet-4": "claude-sonnet-4-20250514",
     "sonnet-4.5": "claude-sonnet-4-5-20250929",
+    # Routed through the Anthropic-compatible proxy configured in ~/.claude/settings.json.
+    # The [1M] selector asks for the 1M-token context window (200k without it).
+    "deepseek-v4.1-flash-itkk": "deepseek-v4.1-flash-itkk[1M]",
 }
 
 
@@ -52,9 +59,48 @@ class ClaudeBackend(AgentBackend):
             pass
         return stdout
 
+    def _parse_result_object(self, stdout: str) -> Optional[Dict]:
+        """Return the CLI's final ``result`` object, or None if the output isn't JSON.
+
+        Without --verbose the CLI prints one object; with --verbose it prints an
+        array of stream events whose last ``type == "result"`` entry carries the
+        session totals.
+        """
+        try:
+            parsed = json.loads(stdout)
+        except (ValueError, TypeError):
+            return None
+
+        if isinstance(parsed, dict):
+            return parsed if parsed.get("type") == "result" or "usage" in parsed else None
+        if isinstance(parsed, list):
+            for entry in reversed(parsed):
+                if isinstance(entry, dict) and entry.get("type") == "result":
+                    return entry
+        return None
+
+    @staticmethod
+    def _model_from_result(result: Dict) -> str:
+        """Pick the model that produced the usage record.
+
+        modelUsage is keyed by the CLI's normalized model ID; the canonicalModel
+        field preserves it when the key has been rewritten.
+        """
+        model_usage = result.get("modelUsage") or {}
+        if not model_usage:
+            return ""
+        if len(model_usage) == 1:
+            entry = next(iter(model_usage.values()))
+            return entry.get("canonicalModel") or next(iter(model_usage))
+        # Multiple models in one session: report the one with the largest spend.
+        key, entry = max(model_usage.items(), key=lambda kv: kv[1].get("costUSD", 0))
+        return entry.get("canonicalModel") or key
+
     def parse_usage(self, stdout: str) -> Dict:
         usage = {
             "total_cost_usd": 0.0,
+            "reported_cost_usd": 0.0,
+            "cost_source": "none",
             "total_input_tokens": 0,
             "total_cache_creation_tokens": 0,
             "total_cache_read_tokens": 0,
@@ -63,6 +109,44 @@ class ClaudeBackend(AgentBackend):
             "parsing_errors": [],
         }
 
+        result = self._parse_result_object(stdout)
+        if result is not None:
+            tokens = result.get("usage") or {}
+            usage["total_input_tokens"] = int(tokens.get("input_tokens", 0))
+            usage["total_cache_creation_tokens"] = int(tokens.get("cache_creation_input_tokens", 0))
+            usage["total_cache_read_tokens"] = int(tokens.get("cache_read_input_tokens", 0))
+            usage["total_output_tokens"] = int(tokens.get("output_tokens", 0))
+            usage["reported_cost_usd"] = float(result.get("total_cost_usd") or 0.0)
+            usage["sessions_count"] = 1
+
+            model = self._model_from_result(result)
+            computed = compute_cost(
+                model,
+                usage["total_input_tokens"],
+                usage["total_cache_read_tokens"],
+                usage["total_cache_creation_tokens"],
+                usage["total_output_tokens"],
+            )
+            if computed is not None:
+                # The CLI prices unrecognized models at an unrelated list rate.
+                usage["total_cost_usd"] = computed
+                usage["cost_source"] = "pricing_table"
+            else:
+                usage["total_cost_usd"] = usage["reported_cost_usd"]
+                usage["cost_source"] = "cli_reported"
+
+            self.logger.info(
+                f"Parsed API usage for {model or 'unknown model'}: "
+                f"cost ${usage['total_cost_usd']:.6f} ({usage['cost_source']}), "
+                f"tokens in={usage['total_input_tokens']}, "
+                f"cache_read={usage['total_cache_read_tokens']}, "
+                f"cache_write={usage['total_cache_creation_tokens']}, "
+                f"out={usage['total_output_tokens']}"
+            )
+            return usage
+
+        # Fallback for output the JSON parser could not handle (truncated or
+        # reformatted by a CLI upgrade): scrape the regex shape the CLI emitted.
         try:
             pattern = (
                 r'"total_cost_usd":([0-9.]+),"usage":\{'
@@ -75,7 +159,7 @@ class ClaudeBackend(AgentBackend):
             if matches:
                 for m in matches:
                     try:
-                        usage["total_cost_usd"] += float(m[0])
+                        usage["reported_cost_usd"] += float(m[0])
                         usage["total_input_tokens"] += int(m[1])
                         usage["total_cache_creation_tokens"] += int(m[2])
                         usage["total_cache_read_tokens"] += int(m[3])
@@ -84,9 +168,25 @@ class ClaudeBackend(AgentBackend):
                     except (ValueError, IndexError) as e:
                         usage["parsing_errors"].append(f"Error parsing match {m}: {e}")
 
+                # The regex cannot recover the model the CLI billed for, so price
+                # against the model this backend was asked to run.
+                computed = compute_cost(
+                    self.model,
+                    usage["total_input_tokens"],
+                    usage["total_cache_read_tokens"],
+                    usage["total_cache_creation_tokens"],
+                    usage["total_output_tokens"],
+                )
+                if computed is not None:
+                    usage["total_cost_usd"] = computed
+                    usage["cost_source"] = "pricing_table"
+                else:
+                    usage["total_cost_usd"] = usage["reported_cost_usd"]
+                    usage["cost_source"] = "cli_reported"
+
                 self.logger.info(
-                    f"Parsed {usage['sessions_count']} API usage entries, "
-                    f"total cost: ${usage['total_cost_usd']:.6f}"
+                    f"Parsed {usage['sessions_count']} API usage entries from regex fallback, "
+                    f"total cost: ${usage['total_cost_usd']:.6f} ({usage['cost_source']})"
                 )
             else:
                 self.logger.warning("No Claude API usage data found in output")

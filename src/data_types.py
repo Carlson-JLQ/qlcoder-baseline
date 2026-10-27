@@ -15,7 +15,7 @@ class VulnAnalysisTask:
     output_dir: Optional[str] = None
     working_dir: Optional[str] = None  # Current working directory for file operations
     max_iteration: Optional[int] = 1
-    model: Optional[str] = "sonnet"
+    model: Optional[str] = "sonnet-4"
     ast_cache: Optional[str] = None
     nvd_cache: Optional[str] = None 
 

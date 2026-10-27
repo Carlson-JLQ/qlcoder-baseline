@@ -260,6 +260,28 @@ Additional options can be passed after the CVE ID:
 ```sh
 ./run_cve.sh CVE-2025-27818 --model sonnet-4.5 --max-iteration 10
 ```
+
+To run one or more CVEs sequentially in isolated processes, use the batch runner:
+```sh
+# Single CVE
+python3 scripts/run_cves.py --cve CVE-2025-27818
+
+# Multiple CVEs
+python3 scripts/run_cves.py --cves CVE-2025-27818,CVE-2025-0851 --model sonnet-4.5
+
+# One CVE per line (blank lines and comments are supported)
+python3 scripts/run_cves.py --cve-file data/cve.txt --max-iteration 10
+
+# Optional per-CVE timeout
+python3 scripts/run_cves.py --cve-file data/cve.txt --timeout 7200
+```
+
+Each CVE runs in its own child process. A failure, crash, timeout, or Ctrl-C
+terminates only the current CVE and processing continues with the next one.
+Per-CVE logs and a final `summary.json` are written under
+`logs/qlcoder_batch_<timestamp>/`. The batch command exits non-zero after all
+CVEs have been attempted if any CVE did not complete successfully.
+
 ## Usage
 Below are the available configurations for QLCoder.
 
@@ -267,7 +289,7 @@ Below are the available configurations for QLCoder.
 
 > **Note:** Agent support is tested against the versions listed in [Paper Environment](#paper-environment). Newer versions of coding agents may require updates to the backend. PRs adding support for newer versions, other coding agents, and more models are welcome!
 
-**Models** (`--model`): `sonnet-4` (default), `sonnet-4.5` (Claude); `gemini-2.5-pro`, `gemini-2.5-flash` (Gemini); `gpt-5` (Codex) 
+**Models** (`--model`): `sonnet-4` (default), `sonnet-4.5`, `deepseek-v4.1-flash-itkk` (Claude); `gemini-2.5-pro`, `gemini-2.5-flash` (Gemini); `gpt-5` (Codex)
 
 **Agents** (`--agent`): `claude` (default), `gemini` (Gemini CLI), `codex` (OpenAI models and open source models)
 
