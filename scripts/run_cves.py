@@ -6,9 +6,9 @@ Examples:
     python3 scripts/run_cves.py --cves CVE-2025-31720,CVE-2025-31721 --model gpt-5 --agent codex
     python3 scripts/run_cves.py --cve-file data/cve.txt --max-iteration 10
 
-Arguments not consumed by this wrapper are forwarded to ``run_cve.sh`` and
-ultimately to ``src/ql_agent.py``.  A failure, crash, timeout, or Ctrl-C stops
-only the current CVE; the next CVE is then started.
+Arguments not consumed by this wrapper are forwarded directly to
+``src/ql_agent.py``. A failure, crash, timeout, or Ctrl-C stops only the
+current CVE; the next CVE is then started.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -29,7 +30,7 @@ from typing import Iterable, List, Sequence
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_RUNNER = ROOT_DIR / "run_cve.sh"
+QL_AGENT = ROOT_DIR / "src" / "ql_agent.py"
 CVE_PATTERN = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 
 
@@ -110,24 +111,55 @@ def stream_output(process: subprocess.Popen[str], log_file, cve_id: str) -> None
         sys.stdout.flush()
 
 
+def build_qlcoder_command(cve_id: str, forwarded_args: Sequence[str]) -> List[str]:
+    """Build a direct ql_agent.py command for one CVE."""
+    cve_dir = ROOT_DIR / "cves" / cve_id
+    return [
+        sys.executable,
+        str(QL_AGENT),
+        "--cve-id",
+        cve_id,
+        "--vuln-db",
+        str(cve_dir / f"{cve_id}-vul"),
+        "--fixed-db",
+        str(cve_dir / f"{cve_id}-fix"),
+        "--diff",
+        str(cve_dir / f"{cve_id}.diff"),
+        *forwarded_args,
+    ]
+
+
+def build_child_environment() -> dict[str, str]:
+    """Return an environment in which both ``src`` import styles work."""
+    env = os.environ.copy()
+    root_path = str(ROOT_DIR)
+    existing_paths = [
+        path for path in env.get("PYTHONPATH", "").split(os.pathsep) if path
+    ]
+    env["PYTHONPATH"] = os.pathsep.join(
+        [root_path, *(path for path in existing_paths if path != root_path)]
+    )
+    return env
+
+
 def run_one_cve(
     cve_id: str,
-    runner: Path,
     forwarded_args: Sequence[str],
     timeout_seconds: float,
     log_path: Path,
 ) -> RunResult:
-    command = [str(runner), cve_id, *forwarded_args]
+    command = build_qlcoder_command(cve_id, forwarded_args)
     started = time.monotonic()
 
     with log_path.open("w", encoding="utf-8") as log_file:
-        log_file.write(f"Command: {' '.join(command)}\n")
+        log_file.write(f"Command: {shlex.join(command)}\n")
         log_file.flush()
 
         try:
             process = subprocess.Popen(
                 command,
                 cwd=ROOT_DIR,
+                env=build_child_environment(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -161,8 +193,8 @@ def run_one_cve(
             return RunResult(cve_id, "timeout", process.returncode, duration, str(log_path), reason)
         except KeyboardInterrupt:
             # The requested batch behavior is to cancel only this CVE and then
-            # continue.  The child has its own process group so Docker and all
-            # of its descendants are stopped together.
+            # continue. The child has its own process group, so ql_agent.py and
+            # all of its descendants are stopped together.
             terminate_process_group(process)
             output_thread.join(timeout=5)
             duration = time.monotonic() - started
@@ -197,7 +229,7 @@ def validate_forwarded_args(args: Sequence[str]) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run QLCoder sequentially for one or more CVEs; failures affect only the current CVE.",
-        epilog="Unknown arguments are forwarded to run_cve.sh, for example --model and --max-iteration.",
+        epilog="Unknown arguments are forwarded to src/ql_agent.py, for example --model and --max-iteration.",
     )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--cve", help="Process one CVE")
@@ -214,12 +246,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--log-dir",
         type=Path,
         help="Batch log directory (default: logs/qlcoder_batch_<timestamp>)",
-    )
-    parser.add_argument(
-        "--runner",
-        type=Path,
-        default=DEFAULT_RUNNER,
-        help=f"Per-CVE runner (default: {DEFAULT_RUNNER})",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing them")
     return parser
@@ -245,22 +271,20 @@ def main() -> int:
     if args.timeout < 0:
         parser.error("--timeout cannot be negative")
 
-    runner = args.runner.expanduser().resolve()
-    if not runner.is_file():
-        parser.error(f"Runner not found: {runner}")
-    if not os.access(runner, os.X_OK):
-        parser.error(f"Runner is not executable: {runner}")
+    if not QL_AGENT.is_file():
+        parser.error(f"QLCoder entry point not found: {QL_AGENT}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_dir = (args.log_dir or ROOT_DIR / "logs" / f"qlcoder_batch_{timestamp}").expanduser().resolve()
 
     print(f"CVEs to process: {len(cves)}")
-    print(f"Runner: {runner}")
+    print(f"Python: {sys.executable}")
+    print(f"QLCoder entry point: {QL_AGENT}")
     print(f"Forwarded QLCoder arguments: {list(forwarded_args)}")
 
     if args.dry_run:
         for cve_id in cves:
-            print("DRY RUN:", " ".join([str(runner), cve_id, *forwarded_args]))
+            print("DRY RUN:", shlex.join(build_qlcoder_command(cve_id, forwarded_args)))
         return 0
 
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -272,7 +296,6 @@ def main() -> int:
         print(f"{'=' * 72}")
         result = run_one_cve(
             cve_id,
-            runner,
             forwarded_args,
             args.timeout,
             log_dir / f"{cve_id}.log",

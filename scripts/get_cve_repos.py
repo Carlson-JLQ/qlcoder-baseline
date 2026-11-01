@@ -302,7 +302,7 @@ def ensure_commits_available(repo_path: str, commit_ids: List[str]) -> bool:
     return True
 
 
-def generate_diff(repo_path: str, vulnerable_commit: str, fix_commit: str) -> Optional[str]:
+def generate_diff(repo_path: str, vulnerable_commit: str, fix_commit: str) -> Optional[bytes]:
     """
     Generate a diff between vulnerable and fixed commits.
 
@@ -312,19 +312,21 @@ def generate_diff(repo_path: str, vulnerable_commit: str, fix_commit: str) -> Op
         fix_commit: SHA of the fix commit
 
     Returns:
-        The diff as a string, or None if failed
+        The raw diff bytes, or None if failed. Git repositories may contain
+        historical files that are not valid UTF-8, so the diff must remain
+        binary-safe until it is written to disk.
     """
     try:
         result = subprocess.run(
             ['git', 'diff', vulnerable_commit, fix_commit],
             cwd=repo_path,
             capture_output=True,
-            text=True,
             check=True
         )
         return result.stdout
     except subprocess.CalledProcessError as e:
-        print(f"  Error generating diff: {e.stderr}")
+        error = e.stderr.decode('utf-8', errors='replace') if e.stderr else str(e)
+        print(f"  Error generating diff: {error}")
         return None
 
 
@@ -403,7 +405,7 @@ def process_cve(cve_id: str, cve_info: Dict, force: bool = False) -> bool:
             print(f"  Warning: Empty diff generated")
 
         # Save diff to file
-        with open(diff_file, 'w', encoding='utf-8') as f:
+        with open(diff_file, 'wb') as f:
             f.write(diff_content)
         print(f"  Saved diff to: {diff_file}")
     else:

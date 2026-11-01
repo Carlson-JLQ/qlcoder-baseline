@@ -14,8 +14,8 @@ class VulnAnalysisTask:
     cve_description: Optional[str] = None
     output_dir: Optional[str] = None
     working_dir: Optional[str] = None  # Current working directory for file operations
-    max_iteration: Optional[int] = 1
-    model: Optional[str] = "sonnet-4"
+    max_iteration: Optional[int] = 10
+    model: Optional[str] = "deepseek-v4.1-flash-itkk"
     ast_cache: Optional[str] = None
     nvd_cache: Optional[str] = None 
 

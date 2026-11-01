@@ -21,6 +21,13 @@ MODEL_PRICING: Dict[str, Dict[str, float]] = {
         "cache_write": 2.0,
         "output": 8.0,
     },
+    "deepseek-v4.1-flash-ark-eco":{
+        
+        "input_cache_hit": 0.04,
+        "input_cache_miss": 2.0,
+        "cache_write": 2.0,
+        "output": 8.0,
+    }
 }
 
 # Context-size markers such as "[1M]" are part of the model selector, not the

@@ -11,7 +11,7 @@ def get_all_collections() -> List[str]:
     """Get all collection names from Chroma database"""
     try: 
         # Initialize Chroma client (adjust path if needed)
-        client = get_chroma_client 
+        client = get_chroma_client()
         
         # Get all collections
         collections = client.list_collections()
@@ -25,7 +25,7 @@ def delete_cve_analysis_collections(dry_run: bool = True) -> None:
     """Delete all collections prefixed with 'cve_analysis_'"""
     try: 
         # Initialize Chroma client
-        client = get_chroma_client 
+        client = get_chroma_client() 
         
         # Get all collections
         all_collections = get_all_collections()

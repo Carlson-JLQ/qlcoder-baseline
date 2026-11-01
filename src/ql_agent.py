@@ -33,7 +33,8 @@ except ImportError:
 
 class QLAgentIterative:
 
-    def __init__(self, working_dir: str = None, agent_type: str = "claude", model: str = "sonnet-4",
+    def __init__(self, working_dir: str = None, agent_type: str = "claude",
+                 model: str = "deepseek-v4.1-flash-itkk",
                  ablation_mode: str = "full"):
         if working_dir:
             self.working_dir = working_dir
@@ -950,7 +951,8 @@ class QLAgentIterative:
 
 
 class QLAgentIterativeCLI:
-    def __init__(self, working_dir: str = None, agent_type: str = "claude", model: str = "sonnet-4",
+    def __init__(self, working_dir: str = None, agent_type: str = "claude",
+                 model: str = "deepseek-v4.1-flash-itkk",
                  ablation_mode: str = "full"):
         self.agent = QLAgentIterative(working_dir, agent_type=agent_type, model=model,
                                       ablation_mode=ablation_mode)
@@ -981,9 +983,9 @@ class QLAgentIterativeCLI:
     
     async def analyze_vulnerability(self, cve_id: str, vuln_db: str = None, fixed_db: str = None,
                                    diff_file: str = None, 
-                                   output_dir: str = None, max_iteration: int = 5,
+                                   output_dir: str = None, max_iteration: int = 10,
                                    cache_phase_output: bool = True,
-                                   model: str = "sonnet-4") -> bool:
+                                   model: str = "deepseek-v4.1-flash-itkk") -> bool:
         
         # Auto-discover paths if not provided
         if not all([vuln_db, fixed_db, diff_file]):
@@ -998,7 +1000,10 @@ class QLAgentIterativeCLI:
                 return False
         
         try:
-            with open(diff_file, 'r') as f:
+            # Diff files are stored byte-for-byte because historical repositories
+            # can contain source files that are not valid UTF-8. Replace only
+            # undecodable bytes when converting the diff to prompt text.
+            with open(diff_file, 'r', encoding='utf-8', errors='replace') as f:
                 diff_content = f.read()
         except Exception as e:
             print(f"Failed to read diff file: {e}")
@@ -1063,14 +1068,15 @@ async def main():
     parser.add_argument("--fixed-db", help="Path to fixed CodeQL database")
     parser.add_argument("--diff", help="Path to fix commit diff file")
     parser.add_argument("--output-dir", default="output", help="Output directory")
-    parser.add_argument("--max-iteration", default=5, type=int, help="Max iterations")
+    parser.add_argument("--max-iteration", default=10, type=int,
+                        help="Max iterations (default: 10)")
     parser.add_argument("--cache-phase-output", action="store_true", default=True)
     parser.add_argument("--no-cache-phase-output", dest="cache_phase_output", action="store_false")
-    parser.add_argument("--model", default="sonnet-4",
+    parser.add_argument("--model", default="deepseek-v4.1-flash-ark-eco",
                         choices=["sonnet-4", "sonnet-4.5", "deepseek-v4.1-flash-itkk",
-                                 "gemini-2.5-pro", "gemini-2.5-flash", "gpt-5"])
+                                 "gemini-2.5-pro", "gemini-2.5-flash", "gpt-5","deepseek-v4.1-flash-ark-eco"])
     parser.add_argument("--agent", default="claude", choices=["claude", "gemini", "codex"],
-                        help="Agent backend to use")
+                        help="Agent backend to use (default: claude)")
     parser.add_argument("--ablation-mode", default="full",
                         choices=["full", "no_tools", "no_lsp", "no_docs", "no_ast"],
                         help="Ablation mode (default: full)")

@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-QL_CODER_ROOT_DIR = os.path.join(os.path.dirname(__file__), "..")
+QL_CODER_ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # path to vulnerable and fixed CodeQL databases for CVEs 
 CVES_PATH = f"{QL_CODER_ROOT_DIR}/cves"
 LOGS_DIR = f"{QL_CODER_ROOT_DIR}/logs"
@@ -30,30 +30,29 @@ LIBRARY_QLPACK_PATH = os.environ.get(
     "LIBRARY_QLPACK_PATH",
     f"{_CODEQL_HOME}/qlpacks/codeql/java-all/7.4.0/semmle/code/java",
 )
-CODEQL_LSP_MCP_PATH = os.environ.get("CODEQL_LSP_MCP_PATH", "/path/to/codeql-lsp-mcp")
+CODEQL_LSP_MCP_PATH = os.path.abspath(os.environ.get(
+    "CODEQL_LSP_MCP_PATH",
+    os.path.join(QL_CODER_ROOT_DIR, "codeql-lsp-mcp"),
+))
+CODEQL_MCP_PATH = os.path.abspath(os.environ.get(
+    "CODEQL_MCP_PATH",
+    os.path.join(CODEQL_LSP_MCP_PATH, "dist", "index.js"),
+))
 CODEQL_PATH = os.environ.get("CODEQL_PATH", f"{_CODEQL_HOME}/codeql")
-# ChromaDB connection settings
-# Set CHROMA_HOST to use HTTP client (Docker/remote), unset for local PersistentClient
-CHROMA_HOST = os.environ.get("CHROMA_HOST", None)
+# ChromaDB HTTP server settings. Local runs use `chroma run --path chroma_db/`;
+# Docker overrides the host with the Compose service name `chroma`.
+CHROMA_HOST = os.environ.get("CHROMA_HOST", "127.0.0.1")
 CHROMA_PORT = int(os.environ.get("CHROMA_PORT", "8000"))
-CHROMA_AUTH_TOKEN = os.environ.get("CHROMA_AUTH_TOKEN", "test")
+CHROMA_AUTH_TOKEN = os.environ.get("CHROMA_AUTH_TOKEN", "")
 CHROMA_DB_PATH = os.environ.get(
     "CHROMA_DB_PATH",
     os.path.join(QL_CODER_ROOT_DIR, "chroma_db")
 )
 
 def get_chroma_client() -> chromadb.ClientAPI:
-    """Return a ChromaDB client based on environment configuration.
-
-    - If CHROMA_HOST is set: returns HttpClient (for Docker / remote ChromaDB server)
-    - Otherwise: returns PersistentClient (for local development)
-    """
-    if CHROMA_HOST:
-        return chromadb.HttpClient(
-            host=CHROMA_HOST,
-            port=CHROMA_PORT,
-            headers={"Authorization": f"Bearer {CHROMA_AUTH_TOKEN}"} if CHROMA_AUTH_TOKEN else None,
-        )
-    else:
-        os.makedirs(CHROMA_DB_PATH, exist_ok=True)
-        return chromadb.PersistentClient(path=CHROMA_DB_PATH)
+    """Return the HTTP client shared by QLCoder and the Chroma MCP server."""
+    return chromadb.HttpClient(
+        host=CHROMA_HOST,
+        port=CHROMA_PORT,
+        headers={"Authorization": f"Bearer {CHROMA_AUTH_TOKEN}"} if CHROMA_AUTH_TOKEN else None,
+    )

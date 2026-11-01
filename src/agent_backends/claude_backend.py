@@ -4,10 +4,17 @@ import os
 import re
 import shutil
 import subprocess
+import urllib.request
 from typing import Dict, Optional
 
 from . import AgentBackend
-from src.config import CHROMA_DB_PATH, CHROMA_AUTH_TOKEN, CHROMA_HOST, CHROMA_PORT, CODEQL_LSP_MCP_PATH
+from src.config import (
+    CHROMA_AUTH_TOKEN,
+    CHROMA_DB_PATH,
+    CHROMA_HOST,
+    CHROMA_PORT,
+    CODEQL_MCP_PATH,
+)
 from . import claude_prompts as prompts
 try:
     from src.pricing import compute_cost
@@ -25,6 +32,7 @@ MODELS = {
     # Routed through the Anthropic-compatible proxy configured in ~/.claude/settings.json.
     # The [1M] selector asks for the 1M-token context window (200k without it).
     "deepseek-v4.1-flash-itkk": "deepseek-v4.1-flash-itkk[1M]",
+    "deepseek-v4.1-flash-ark-eco": "deepseek-v4.1-flash-ark-eco[1M]",
 }
 
 
@@ -332,26 +340,15 @@ class ClaudeBackend(AgentBackend):
 
     def _generate_mcp_config(self, working_dir: str) -> str:
         """Generate MCP desktop config JSON from environment variables."""
-        codeql_mcp = os.environ.get(
-            "CODEQL_MCP_PATH", f"{CODEQL_LSP_MCP_PATH}/dist/index.js"
-        )
-
         config = {
             "mcpServers": {
-                "chroma-http": {
+                "chroma": {
                     "command": "uvx",
-                    "args": [
-                        "chroma",
-                        "--client-type", "http",
-                        "--host", f"http://{CHROMA_HOST}",
-                        "--port", str(CHROMA_PORT),
-                        "--custom-auth-credentials", CHROMA_AUTH_TOKEN,
-                        "--ssl", "false",
-                    ],
+                    "args": self._chroma_mcp_args()[1:],
                 },
                 "codeql": {
                     "command": "node",
-                    "args": [codeql_mcp],
+                    "args": [CODEQL_MCP_PATH],
                 },
             }
         }
@@ -365,68 +362,106 @@ class ClaudeBackend(AgentBackend):
         self.logger.info(f"Generated MCP config at {config_path}")
         return config_path
 
+    @staticmethod
+    def _chroma_mcp_args() -> list[str]:
+        """Build the one canonical Chroma MCP command used by all configs."""
+        args = [
+            "uvx",
+            "--with", "pydantic==2.10.6",
+            "chroma-mcp==0.2.6",
+            "--client-type", "http",
+            "--host", CHROMA_HOST,
+            "--port", str(CHROMA_PORT),
+            "--ssl", "false",
+        ]
+        if CHROMA_AUTH_TOKEN:
+            args.extend(["--custom-auth-credentials", CHROMA_AUTH_TOKEN])
+        return args
+
+    @staticmethod
+    def _validate_chroma_server() -> None:
+        """Fail before model execution when the configured server is unavailable."""
+        url = f"http://{CHROMA_HOST}:{CHROMA_PORT}/api/v2/heartbeat"
+        headers = {}
+        if CHROMA_AUTH_TOKEN:
+            headers["Authorization"] = f"Bearer {CHROMA_AUTH_TOKEN}"
+        try:
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=3) as response:
+                if response.status != 200:
+                    raise ConnectionError(f"Heartbeat returned HTTP {response.status}")
+        except Exception as exc:
+            raise ConnectionError(
+                f"Chroma server is unavailable at http://{CHROMA_HOST}:{CHROMA_PORT}. "
+                f"Start it with 'chroma run --path {CHROMA_DB_PATH}'."
+            ) from exc
+
     def _setup_project_scoped_codeql(self, workspace_dir: str):
         """Register project-scoped CodeQL MCP server."""
+        if not os.path.isfile(CODEQL_MCP_PATH):
+            raise FileNotFoundError(
+                f"CodeQL MCP entry point not found: {CODEQL_MCP_PATH}. "
+                "Build codeql-lsp-mcp or set CODEQL_MCP_PATH."
+            )
+
         original_cwd = os.getcwd()
         os.chdir(workspace_dir)
         try:
             self.logger.info("Setting up project-scoped CodeQL MCP server...")
             result = subprocess.run(
                 [
-                    "claude", "mcp", "add", "codeql",
+                    self.cli_path, "mcp", "add", "codeql",
                     "--scope", "project",
                     "node",
-                    f"{CODEQL_LSP_MCP_PATH}/dist/index.js"
+                    CODEQL_MCP_PATH,
                 ],
                 capture_output=True, text=True, timeout=30,
             )
             if result.returncode != 0:
-                self.logger.warning(f"CodeQL MCP setup: {result.stderr}")
-            else:
-                self.logger.info("CodeQL MCP configured")
+                raise RuntimeError(f"CodeQL MCP registration failed: {result.stderr.strip()}")
+            self.logger.info("CodeQL MCP configured")
 
-            if os.path.exists(".mcp.json"):
-                self.logger.info("Project-scoped CodeQL MCP configured successfully")
-                with open(".mcp.json") as f:
-                    self.logger.debug(f"MCP config: {json.load(f)}")
-            else:
-                self.logger.warning(".mcp.json file not created")
-        except Exception as e:
-            self.logger.error(f"Failed to setup project-scoped CodeQL MCP: {e}")
+            if not os.path.exists(".mcp.json"):
+                raise RuntimeError("CodeQL MCP registration did not create .mcp.json")
+            with open(".mcp.json") as f:
+                project_config = json.load(f)
+            if "codeql" not in project_config.get("mcpServers", {}):
+                raise RuntimeError("CodeQL MCP is missing from .mcp.json")
+            self.logger.info("Project-scoped CodeQL MCP configured successfully")
+            self.logger.debug(f"MCP config: {project_config}")
         finally:
             os.chdir(original_cwd)
 
     def _setup_project_scoped_chroma(self, workspace_dir: str):
         """Register project-scoped Chroma MCP server (HTTP client)."""
+        if not shutil.which("uvx"):
+            raise FileNotFoundError("uvx is required to start chroma-mcp")
+        self._validate_chroma_server()
+
         original_cwd = os.getcwd()
         os.chdir(workspace_dir)
         try:
             self.logger.info("Setting up project-scoped Chroma MCP server...")
+            chroma_command = self._chroma_mcp_args()
             result = subprocess.run(
                 [
-                    "claude", "mcp", "add", "chroma",
+                    self.cli_path, "mcp", "add", "chroma",
                     "--scope", "project", "--",
-                    "uvx", "chroma-mcp",
-                    "--client-type", "http",
-                    "--host", CHROMA_HOST,
-                    "--port", str(CHROMA_PORT),
-                    "--custom-auth-credentials", CHROMA_AUTH_TOKEN,
-                    "--ssl", "false",
+                    *chroma_command,
                 ],
                 capture_output=True, text=True, timeout=30,
             )
             if result.returncode != 0:
-                self.logger.warning(f"Chroma MCP setup: {result.stderr}")
-            else:
-                self.logger.info("Chroma MCP configured with HTTP client")
+                raise RuntimeError(f"Chroma MCP registration failed: {result.stderr.strip()}")
+            self.logger.info("Chroma MCP configured with HTTP client")
 
-            if os.path.exists(".mcp.json"):
-                self.logger.info("Project-scoped Chroma MCP configured successfully")
-                with open(".mcp.json") as f:
-                    self.logger.debug(f"MCP config: {json.load(f)}")
-            else:
-                self.logger.warning(".mcp.json file not created")
-        except Exception as e:
-            self.logger.error(f"Failed to setup project-scoped Chroma MCP: {e}")
+            if not os.path.exists(".mcp.json"):
+                raise RuntimeError("Chroma MCP registration did not create .mcp.json")
+            with open(".mcp.json") as f:
+                project_config = json.load(f)
+            if "chroma" not in project_config.get("mcpServers", {}):
+                raise RuntimeError("Chroma MCP is missing from .mcp.json")
+            self.logger.info("Project-scoped Chroma MCP configured successfully")
+            self.logger.debug(f"MCP config: {project_config}")
         finally:
             os.chdir(original_cwd)

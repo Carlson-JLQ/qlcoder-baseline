@@ -1,7 +1,9 @@
 # QLCoder
+
 Agentic Framework for Synthesizing CodeQL Queries
 
 ## Table of Contents
+
 - [Overview](#overview)
 - [Installation](#installation)
   - [Docker (Recommended)](#docker-recommended)
@@ -20,22 +22,23 @@ Agentic Framework for Synthesizing CodeQL Queries
 
 ![QLCoder Iterative Refinement](img/iterative-refinement-figure.png)
 
-QLCoder is a framework for using LLMs to synthesize end-to-end CodeQL queries for vulnerability detection. Given an existing CVE's metadata, LLM, and coding agent, QLCoder iteratively synthesizes a CodeQL query to detect the existing CVE. The starting query is a CodeQL path query template populated by an extracted AST of the diff. While synthesizing the query, the coding agent has access to tools to interface with a RAG database and the CodeQL language server. Afterwards, the query can be used for multivariant analysis, regression testing, or guidance for writing CodeQL queries. 
+QLCoder is a framework for using LLMs to synthesize end-to-end CodeQL queries for vulnerability detection. Given an existing CVE's metadata, LLM, and coding agent, QLCoder iteratively synthesizes a CodeQL query to detect the existing CVE. The starting query is a CodeQL path query template populated by an extracted AST of the diff. While synthesizing the query, the coding agent has access to tools to interface with a RAG database and the CodeQL language server. Afterwards, the query can be used for multivariant analysis, regression testing, or guidance for writing CodeQL queries.
 
 ## Installation
 
 ### Docker (Recommended)
 
 #### Step 1: Install CodeQL
+
 Note - In the paper, CodeQL version 2.22.2 was used. However, any version (and language) can be used. QLCoder stores the local CodeQL version's QL packs in the vector database. Paths are configured in `.env`.
 
 Download an appropriate version of the CodeQL Action bundle from the [CodeQL Action releases page](https://github.com/github/codeql-action/releases).
 
 - **For the latest version:**
   Visit the [latest release](https://github.com/github/codeql-action/releases/latest) and download the appropriate bundle for your OS:
+
   - `codeql-bundle-osx64.tar.gz` for macOS
   - `codeql-bundle-linux64.tar.gz` for Linux
-
 - **For a specific version (e.g., 2.22.2):**
   Go to the [CodeQL Action releases page](https://github.com/github/codeql-action/releases), find the release tagged `codeql-bundle-v2.22.2`, and download the appropriate bundle for your platform.
 
@@ -46,6 +49,7 @@ tar -xzf codeql-bundle-<platform>.tar.gz -C ~/
 ```
 
 #### Step 2: Install the CodeQL LSP MCP server
+
 Clone the [CodeQL LSP MCP server](https://github.com/neuralprogram/codeql-lsp-mcp) and build it.
 
 ```sh
@@ -64,6 +68,7 @@ echo "APP_GID=$(id -g)" >> .env
 ```
 
 Fill in your API key and CodeQL paths in `.env`:
+
 ```
 ANTHROPIC_API_KEY=...
 
@@ -76,6 +81,7 @@ LIBRARY_QLPACK_PATH=~/codeql/qlpacks/codeql/java-all/<version>/semmle/code/java
 ```
 
 Then start the QLCoder app and ChromaDB:
+
 ```sh
 docker compose up -d
 ```
@@ -125,14 +131,15 @@ docker compose run --rm app python3 scripts/cves_fetcher.py
 ### Native (Linux)
 
 #### Step 1: Install CodeQL
+
 Note - In the paper, CodeQL version 2.22.2 was used. However, any version (and language) can be used. QLCoder stores the local CodeQL version's QL packs in the vector database. Paths are configured in `.env`.
 
 Download an appropriate version of the CodeQL Action bundle from the [CodeQL Action releases page](https://github.com/github/codeql-action/releases).
 
 - **For the latest version:**
   Visit the [latest release](https://github.com/github/codeql-action/releases/latest) and download the appropriate bundle for your OS:
-  - `codeql-bundle-linux64.tar.gz` for Linux
 
+  - `codeql-bundle-linux64.tar.gz` for Linux
 - **For a specific version (e.g., 2.22.2):**
   Go to the [CodeQL Action releases page](https://github.com/github/codeql-action/releases), find the release tagged `codeql-bundle-v2.22.2`, and download the appropriate bundle for your platform.
 
@@ -151,6 +158,7 @@ export PATH="$PWD/codeql:$PATH"
 ```
 
 #### Step 2: Install the CodeQL LSP MCP server
+
 Clone the [CodeQL LSP MCP server](https://github.com/neuralprogram/codeql-lsp-mcp) and build it.
 
 ```sh
@@ -161,6 +169,7 @@ npm run build
 ```
 
 #### Step 3: Setup Conda environment
+
 ```sh
 conda env create -f environment.yml
 conda activate qlcoder
@@ -173,6 +182,7 @@ cp .env.example .env
 ```
 
 Fill in your API key and CodeQL paths in `.env`:
+
 ```
 ANTHROPIC_API_KEY=...
 CODEQL_HOME=~/codeql
@@ -213,7 +223,7 @@ python3 scripts/build_codeql_dbs.py --cve-id CVE-2025-27818
 
 ```sh
 # to build all of the fetched CVE repos' CodeQL databases
-python3 scripts/build_codeql_dbs.py 
+python3 scripts/build_codeql_dbs.py
 ```
 
 This creates `cves/CVE-2025-27818/CVE-2025-27818-vul` and `cves/CVE-2025-27818/CVE-2025-27818-fix`.
@@ -223,8 +233,12 @@ This creates `cves/CVE-2025-27818/CVE-2025-27818-vul` and `cves/CVE-2025-27818/C
 Start ChromaDB in a separate terminal and keep it running for this step and whenever running the agent.
 
 ```sh
-chroma run --path data/chroma_db
+chroma run --path chroma_db/
 ```
+
+Local runs connect to `127.0.0.1:8000` by default. Keep this server running in
+a separate terminal while populating the RAG database and running QLCoder. Set
+`CHROMA_HOST` and `CHROMA_PORT` only when the server uses a different address.
 
 #### Step 8: Populate RAG database
 
@@ -237,31 +251,41 @@ python3 scripts/cves_fetcher.py
 ```
 
 ## Quick Start
+
 After following the Installation instructions, the quick start walks through an example of synthesizing a CodeQL query for a given CVE.
 
 1. Retrieve the CVE repository and CVE fix diff.
+
 ```sh
 python3 scripts/get_cve_repos.py --cve CVE-2025-27818
 ```
+
 2. Create CodeQL databases for the CVE.
+
 ```sh
 python3 scripts/build_codeql_dbs.py --cve-id CVE-2025-27818
 ```
+
 3. Populate or update the RAG database.
+
 ```sh
 python3 scripts/cves_fetcher.py
 ```
+
 4. Run the pipeline.
+
 ```sh
 ./run_cve.sh CVE-2025-27818
 ```
 
 Additional options can be passed after the CVE ID:
+
 ```sh
 ./run_cve.sh CVE-2025-27818 --model sonnet-4.5 --max-iteration 10
 ```
 
 To run one or more CVEs sequentially in isolated processes, use the batch runner:
+
 ```sh
 # Single CVE
 python3 scripts/run_cves.py --cve CVE-2025-27818
@@ -276,37 +300,44 @@ python3 scripts/run_cves.py --cve-file data/cve.txt --max-iteration 10
 python3 scripts/run_cves.py --cve-file data/cve.txt --timeout 7200
 ```
 
-Each CVE runs in its own child process. A failure, crash, timeout, or Ctrl-C
-terminates only the current CVE and processing continues with the next one.
+The batch runner invokes `src/ql_agent.py` directly with the same Python
+interpreter used to start `run_cves.py`; it does not use Docker or
+`run_cve.sh`. It automatically adds the repository root to each child
+process's `PYTHONPATH`. Each CVE runs in its own child process. A failure,
+crash, timeout, or Ctrl-C terminates only the current CVE and processing
+continues with the next one.
 Per-CVE logs and a final `summary.json` are written under
 `logs/qlcoder_batch_<timestamp>/`. The batch command exits non-zero after all
 CVEs have been attempted if any CVE did not complete successfully.
 
 ## Usage
+
 Below are the available configurations for QLCoder.
 
 > **Timeout:** Each agent context window has a default shell timeout (e.g. 300s). Increase the timeout in the relevant backend's execution method if needed when running into "Context window failed" errors.
 
 > **Note:** Agent support is tested against the versions listed in [Paper Environment](#paper-environment). Newer versions of coding agents may require updates to the backend. PRs adding support for newer versions, other coding agents, and more models are welcome!
 
-**Models** (`--model`): `sonnet-4` (default), `sonnet-4.5`, `deepseek-v4.1-flash-itkk` (Claude); `gemini-2.5-pro`, `gemini-2.5-flash` (Gemini); `gpt-5` (Codex)
+**Models** (`--model`): `sonnet-4`, `sonnet-4.5`, `deepseek-v4.1-flash-itkk` (default, Claude); `gemini-2.5-pro`, `gemini-2.5-flash` (Gemini); `gpt-5` (Codex)
 
 **Agents** (`--agent`): `claude` (default), `gemini` (Gemini CLI), `codex` (OpenAI models and open source models)
 
 **Ablation modes** (`--ablation-mode`):
 
-| Mode | Description | Available Agents
-|---|---| --- |
-| `full` | All QLCoder tools enabled (default) and AST extraction | Claude Code, Codex (GPT, GPT-OSS), Gemini 
-| `no_tools` | No tools and no AST extraction | Claude Code, Codex (GPT, GPT-OSS), Gemini 
-| `no_lsp` | No CodeQL LSP tools | Claude Code
-| `no_docs` | No CodeQL documentation retrieval | Claude Code
-| `no_ast` | No AST extraction from diff | Claude Code
+| Mode         | Description                                            | Available Agents                          |
+| ------------ | ------------------------------------------------------ | ----------------------------------------- |
+| `full`     | All QLCoder tools enabled (default) and AST extraction | Claude Code, Codex (GPT, GPT-OSS), Gemini |
+| `no_tools` | No tools and no AST extraction                         | Claude Code, Codex (GPT, GPT-OSS), Gemini |
+| `no_lsp`   | No CodeQL LSP tools                                    | Claude Code                               |
+| `no_docs`  | No CodeQL documentation retrieval                      | Claude Code                               |
+| `no_ast`   | No AST extraction from diff                            | Claude Code                               |
 
 ### Model-specific notes (GPT-5)
+
 By default we set the reasoning effort to medium. You can override this in [`codex_backend.py`](src/agent_backends/codex_backend.py#L365).
 
 ### No Tools, No Docs mode (Paper specifics)
+
 When Chroma isn't used for fetching the CVE description, a pre-fetched description is injected directly into the prompt via `task.cve_description`. Use `scripts/cves_fetcher.py` to populate a local JSON file of descriptions:
 
 ```sh
@@ -315,56 +346,66 @@ python scripts/cves_fetcher.py --descriptions-file data/cve_descriptions.json
 
 The file maps CVE IDs to their CVE description strings and is appended to on each run (existing entries are skipped). When running with `--ablation-mode no_tools` or `--ablation-mode no_docs`, QLCoder automatically loads this file and sets `task.cve_description` for the CVE being analyzed.
 
-## Development Tooling 
-The following tools are recommended while using QLCoder: 
+## Development Tooling
+
+The following tools are recommended while using QLCoder:
 
 [Delete collections from QLCoder runs](scripts/delete_cve_analysis_collections.py) - to clean up Chroma, here is a script to delete collections from using QLCoder.
 
-[chromadb-ops](https://github.com/amikos-tech/chromadb-ops) - CLI tool for inspecting and maintaining Chroma. 
+[chromadb-ops](https://github.com/amikos-tech/chromadb-ops) - CLI tool for inspecting and maintaining Chroma.
 
 ```sh
 # useful for cleaning up chroma
-chops db clean data/chroma_db
+chops db clean chroma_db/
 ```
 
-## Examples 
-### QLCoder Generated Query Examples 
+## Examples
+
+### QLCoder Generated Query Examples
+
 - [Java](query-examples-java)
 - [C](query-examples-c)
 
-### QLCoder MCP Configurations 
-Here are examples of MCP configurations when using QLCoder. The configuration should be similar to these files in the agent's workspace. 
+### QLCoder MCP Configurations
+
+Here are examples of MCP configurations when using QLCoder. The configuration should be similar to these files in the agent's workspace.
+
 - [Claude Code](example-mcp-configs/claude_config.json)
 - [Codex](example-mcp-configs/codex_config.toml)
 - [Gemini CLI](example-mcp-configs/gemini_settings.json)
 
 ## Paper Environment
+
 The following versions were used to produce the results in the QLCoder paper.
 
-| Tool | Version |
-|---|---|
-| CodeQL | 2.22.2 |
+| Tool        | Version |
+| ----------- | ------- |
+| CodeQL      | 2.22.2  |
 | Claude Code | 1.0.120 |
-| Gemini CLI | 0.6.0 |
-| Codex CLI | 0.38.0 |
+| Gemini CLI  | 0.6.0   |
+| Codex CLI   | 0.38.0  |
 
 ## Contributions
+
 We welcome any contributions, pull requests, or issues!
 If you would like to contribute, please either file a new pull request or issue. Feel free to take on an existing issue too.
 
-## Team 
-QLCoder is collaborative effort between researchers at Cornell University, Johns Hopkins University, and the University of Pennsylvania. Please reach out to us if you have any questions. 
+## Team
+
+QLCoder is collaborative effort between researchers at Cornell University, Johns Hopkins University, and the University of Pennsylvania. Please reach out to us if you have any questions.
 
 [Claire Wang](https://clairewang.net) - CS PhD Student at University of Pennsylvania
 
 [Ziyang Li](https://liby99.github.io/) - Professor at Johns Hopkins University
 
-[Saikat Dutta](https://www.cs.cornell.edu/~saikatd/) - Professor at Cornell University 
+[Saikat Dutta](https://www.cs.cornell.edu/~saikatd/) - Professor at Cornell University
 
 [Mayur Naik](https://www.cis.upenn.edu/~mhnaik/) - Professor at University of Pennsylvania
 
 ## Citation
+
 Consider citing our ICLR'26 paper:
+
 ```
 @misc{wang2025qlcoderquerysynthesizerstatic,
       title={QLCoder: A Query Synthesizer For Static Analysis of Security Vulnerabilities}, 
@@ -376,10 +417,12 @@ Consider citing our ICLR'26 paper:
       url={https://arxiv.org/abs/2511.08462}, 
 }
 ```
+
 [Arxiv Link](https://arxiv.org/abs/2511.08462)
 
-## Affiliated Projects 
-The following are projects affiliated with the QLCoder authors. Feel free to check them out. 
+## Affiliated Projects
+
+The following are projects affiliated with the QLCoder authors. Feel free to check them out.
 
 - [IRIS](https://github.com/iris-sast/iris) - LLM-identified sources/sinks appended to existing CodeQL security queries for a given repository. QLCoder is an extension of some of the IRIS ideas. [Arxiv Link](https://arxiv.org/abs/2405.17238)
 - [CWE-Bench-Java](https://github.com/iris-sast/iris/tree/v2/data) - Benchmark of Java security vulnerabilities containing CVE metadata, repos, and source/sink labels.

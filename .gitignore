@@ -215,3 +215,4 @@ cves/*
 data/chroma_db
 codeql-lsp-mcp/node_modules/
 cwe-bench-java/
+logs/
