@@ -341,7 +341,7 @@ By default we set the reasoning effort to medium. You can override this in [`cod
 When Chroma isn't used for fetching the CVE description, a pre-fetched description is injected directly into the prompt via `task.cve_description`. Use `scripts/cves_fetcher.py` to populate a local JSON file of descriptions:
 
 ```sh
-python scripts/cves_fetcher.py --descriptions-file data/cve_descriptions.json 
+python scripts/cves_fetcher.py --descriptions-file data/cve_descriptions.json
 ```
 
 The file maps CVE IDs to their CVE description strings and is appended to on each run (existing entries are skipped). When running with `--ablation-mode no_tools` or `--ablation-mode no_docs`, QLCoder automatically loads this file and sets `task.cve_description` for the CVE being analyzed.
