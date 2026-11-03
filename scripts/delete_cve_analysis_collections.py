@@ -4,6 +4,10 @@ Script to delete all Chroma collections prefixed with 'cve_analysis_'
 """
 
 import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 from typing import List
 from src.config import CHROMA_DB_PATH, get_chroma_client
 
