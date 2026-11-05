@@ -5,6 +5,8 @@ Examples:
     python3 scripts/run_cves.py --cve CVE-2025-31720
     python3 scripts/run_cves.py --cves CVE-2025-31720,CVE-2025-31721 --model gpt-5 --agent codex
     python3 scripts/run_cves.py --cve-file data/cve.txt --max-iteration 10
+    python3 scripts/run_cves.py --cve-file data/cve_bak.txt --exclude-cves CVE-2022-1274,CVE-2025-27522
+    python3 scripts/run_cves.py --cve-file data/cve_bak.txt --exclude-existing-output
 
 Arguments not consumed by this wrapper are forwarded directly to
 ``src/ql_agent.py``. A failure, crash, timeout, or Ctrl-C stops only the
@@ -32,6 +34,7 @@ from typing import Iterable, List, Sequence
 ROOT_DIR = Path(__file__).resolve().parent.parent
 QL_AGENT = ROOT_DIR / "src" / "ql_agent.py"
 CVE_PATTERN = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
+OUTPUT_DIR_PATTERN = re.compile(r"^ql_agent_(CVE-\d{4}-\d{4,})_", re.IGNORECASE)
 
 
 @dataclass
@@ -76,6 +79,23 @@ def normalize_cves(values: Iterable[str]) -> List[str]:
     if not result:
         raise ValueError("No CVE IDs were provided")
     return result
+
+
+def find_cves_with_output(output_dir: Path) -> List[str]:
+    """Return CVE IDs represented by QLCoder run directories in output_dir."""
+    if not output_dir.exists():
+        return []
+    if not output_dir.is_dir():
+        raise ValueError(f"Output path is not a directory: {output_dir}")
+
+    cves: List[str] = []
+    for path in sorted(output_dir.iterdir()):
+        if not path.is_dir():
+            continue
+        match = OUTPUT_DIR_PATTERN.match(path.name)
+        if match:
+            cves.append(match.group(1).upper())
+    return cves
 
 
 def terminate_process_group(process: subprocess.Popen[str], grace_seconds: float = 10.0) -> None:
@@ -236,6 +256,33 @@ def build_parser() -> argparse.ArgumentParser:
     source.add_argument("--cves", help="Process comma-separated CVE IDs")
     source.add_argument("--cve-file", type=Path, help="Read CVE IDs from a text file")
     parser.add_argument(
+        "--exclude-cve",
+        action="append",
+        default=[],
+        metavar="CVE",
+        help="Exclude one CVE; may be specified more than once",
+    )
+    parser.add_argument(
+        "--exclude-cves",
+        action="append",
+        default=[],
+        metavar="CVE1,CVE2",
+        help="Exclude comma-separated CVE IDs; may be specified more than once",
+    )
+    parser.add_argument(
+        "--exclude-cve-file",
+        action="append",
+        default=[],
+        type=Path,
+        metavar="FILE",
+        help="Exclude CVE IDs listed in a file; may be specified more than once",
+    )
+    parser.add_argument(
+        "--exclude-existing-output",
+        action="store_true",
+        help="Exclude CVEs that already have a run directory under output/",
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=0,
@@ -259,11 +306,23 @@ def main() -> int:
 
     try:
         if args.cve:
-            cves = normalize_cves([args.cve])
+            requested_cves = normalize_cves([args.cve])
         elif args.cves:
-            cves = normalize_cves(args.cves.split(","))
+            requested_cves = normalize_cves(args.cves.split(","))
         else:
-            cves = normalize_cves(parse_cve_file(args.cve_file))
+            requested_cves = normalize_cves(parse_cve_file(args.cve_file))
+
+        exclusion_values: List[str] = list(args.exclude_cve)
+        for value in args.exclude_cves:
+            exclusion_values.extend(part for part in value.split(",") if part.strip())
+        for path in args.exclude_cve_file:
+            exclusion_values.extend(parse_cve_file(path))
+        if args.exclude_existing_output:
+            exclusion_values.extend(find_cves_with_output(ROOT_DIR / "output"))
+
+        excluded_set = set(normalize_cves(exclusion_values)) if exclusion_values else set()
+        excluded_cves = [cve_id for cve_id in requested_cves if cve_id in excluded_set]
+        cves = [cve_id for cve_id in requested_cves if cve_id not in excluded_set]
         validate_forwarded_args(forwarded_args)
     except ValueError as exc:
         parser.error(str(exc))
@@ -277,10 +336,18 @@ def main() -> int:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_dir = (args.log_dir or ROOT_DIR / "logs" / f"qlcoder_batch_{timestamp}").expanduser().resolve()
 
+    print(f"CVEs requested: {len(requested_cves)}")
+    print(f"CVEs excluded: {len(excluded_cves)}")
+    if excluded_cves:
+        print(f"Excluded CVE IDs: {', '.join(excluded_cves)}")
     print(f"CVEs to process: {len(cves)}")
     print(f"Python: {sys.executable}")
     print(f"QLCoder entry point: {QL_AGENT}")
     print(f"Forwarded QLCoder arguments: {list(forwarded_args)}")
+
+    if not cves:
+        print("No CVEs remain after applying exclusions.")
+        return 0
 
     if args.dry_run:
         for cve_id in cves:
