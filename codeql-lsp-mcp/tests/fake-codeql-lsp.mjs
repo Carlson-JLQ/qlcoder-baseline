@@ -51,10 +51,21 @@ function handle(message) {
   } else if (method === "textDocument/formatting" || method === "textDocument/rangeFormatting") {
     const text = documents.get(params.textDocument.uri)?.text ?? "";
     if (text.includes("HANG_FORMAT")) return;
-    const edits = text.startsWith("from   int") ? [{
-      range: { start: { line: 0, character: 4 }, end: { line: 0, character: 7 } },
-      newText: " ",
-    }] : [];
+    const edits = text.startsWith("from   int") ? [
+      {
+        range: { start: { line: 0, character: 4 }, end: { line: 0, character: 7 } },
+        newText: " ",
+      },
+      {
+        // Exercise the legal LSP position for the empty final line in a
+        // newline-terminated document.
+        range: {
+          start: { line: (text.match(/\n/g) ?? []).length, character: 0 },
+          end: { line: (text.match(/\n/g) ?? []).length, character: 0 },
+        },
+        newText: "// formatted at EOF\n",
+      },
+    ] : [];
     send({ jsonrpc: "2.0", id, result: edits });
   } else if (method === "textDocument/completion") {
     send({ jsonrpc: "2.0", id, result: { isIncomplete: false, items: [] } });

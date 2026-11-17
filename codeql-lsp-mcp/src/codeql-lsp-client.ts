@@ -416,6 +416,14 @@ export class CodeQLLanguageServer {
 
     private offsetAt(content: string, line: number, character: number): number {
         const lines = content.split(/(?<=\n)/);
+        // In LSP coordinates, a document ending in a newline has an empty final
+        // line. Formatters commonly use (lineCount, 0) as the end position of a
+        // whole-document edit. The lookbehind split above retains each newline
+        // on the preceding line and therefore does not create an array element
+        // for that valid trailing empty line.
+        if (line === lines.length && character === 0 && content.endsWith("\n")) {
+            return content.length;
+        }
         if (line < 0 || line >= lines.length) throw new CodeQLLspError("INVALID_TEXT_EDIT", `Invalid line ${line}`);
         const prefix = lines.slice(0, line).reduce((sum, value) => sum + value.length, 0);
         const current = lines[line].replace(/\r?\n$/, "");

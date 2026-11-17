@@ -45,6 +45,10 @@
 | 变更编号 | 日期 | CVE | 类型 | 状态 | 摘要 |
 |---|---|---|---|---|---|
 | `DS-2026-11-01-001` | 2026-11-01 | CVE-2011-4367 | `commit-pair`, `pipeline` | `verified` | 将 fix commits 从错误的 `2.1.x` 分支映射到 `2.0.x`，并使 diff 管线支持非 UTF-8 历史文件 |
+| `DS-2026-11-17-001` | 2026-11-17 | CVE-2022-32287 | `commit-pair`, `ground-truth`, `cleanup` | `applied` | fixed commit 改为首次加入路径约束的提交，并将 GT 收敛到真实修复方法 |
+| `DS-2026-11-17-002` | 2026-11-17 | CVE-2025-2240 | `ground-truth`, `cleanup` | `applied` | 删除 4 个 hunk 上下文误标，补充 6 个真实修改方法 |
+| `DS-2026-11-17-003` | 2026-11-17 | CVE-2025-24789 | `ground-truth`, `cleanup` | `applied` | 将 `openBrowser` 归属到正确内部类并删除未修改的 `build` |
+| `DS-2026-11-17-004` | 2026-11-17 | CVE-2025-26864 | `ground-truth`, `cleanup` | `applied` | 删除重复及 hunk 上下文误标，补充 `User.toString` |
 
 ---
 
@@ -193,6 +197,103 @@ sha256sum cves/CVE-2011-4367/CVE-2011-4367.diff
 5. 在新的输出记录中注明使用变更 `DS-2026-11-01-001` 后的数据。
 
 `autoql_data` 当前不包含 CVE-2011-4367，因此本次没有修改 `autoql_data`。
+
+---
+
+## DS-2026-11-17-001 — CVE-2022-32287 修复提交与 Ground Truth 更正
+
+### 基本信息
+
+| 项目 | 内容 |
+|---|---|
+| 日期 | 2026-11-17 |
+| CVE | CVE-2022-32287 |
+| 项目 | `apache/uima-uimaj` |
+| 变更类型 | `commit-pair`, `ground-truth`, `cleanup` |
+| 状态 | `applied` |
+| 修改文件 | `data/project_info.csv`, `data/fix_info.csv`, `data/rerun_cve.txt` |
+
+### 字段级变更与证据
+
+- `project_info.csv.fix_commit_ids`：`1088f615154b385dd163965b8d2ef78e87111ab1` → `9c99e071be79bdb6bbd1bcd3f20431d76ce5143e`。
+- `1088f615...` 只做文件处理代码整理；`9c99e071...` 才在 `FileUtil.extractFilesFromJar(JarFile, File, FileFilter)` 中加入 canonical path containment check。
+- `fix_info.csv`：删除旧整理提交产生的 25 条无关/错误方法记录，改为 1 条真实修复方法记录。
+- 新 GT 基于 fixed commit：`FileUtil` 66–1498，`extractFilesFromJar` 766–814。
+
+### 派生数据与未完成事项
+
+旧 diff、fixed CodeQL database、Phase 缓存和实验输出均已失效。提交与源码位置已核验；尚未重建 database 和重跑 QLCoder，因此状态为 `applied`。
+
+## DS-2026-11-17-002 — CVE-2025-2240 方法边界 Ground Truth 更正
+
+### 基本信息
+
+| 项目 | 内容 |
+|---|---|
+| 日期 | 2026-11-17 |
+| CVE | CVE-2025-2240 |
+| 项目 | `smallrye/smallrye-fault-tolerance` |
+| 变更类型 | `ground-truth`, `cleanup` |
+| 状态 | `applied` |
+| 修改文件 | `data/fix_info.csv`, `data/rerun_cve.txt` |
+
+### 字段级变更与证据
+
+- GT 数量由 9 条调整为 11 条，行号基准为 fixed commit `e8bcad3d5e8bbac0a3219bd5c13661adf6ed6bbb`。
+- 删除未修改的方法：`FaultToleranceImpl.BuilderImpl.buildAsyncStrategy`、`GuardImpl.BuilderImpl.buildStrategy`、`TypedGuardImpl.BuilderImpl.buildStrategy`、`CdiMeteredOperationImpl` 构造函数。
+- 增加真实修改的方法：`BasicMeteredOperationImpl` 构造函数；三个 Builder 的 `withDescription`；`FaultToleranceImpl.BuilderImpl.buildMeteredOperation`；`TypedGuardImpl.BuilderImpl.buildMeteredOperation`。
+- 保留并规范化 5 个原有正确方法：三个 Builder 构造函数、`GuardImpl.BuilderImpl.buildMeteredOperation`、`DelegatingMetricsCollector.apply`。
+
+### 派生数据与未完成事项
+
+提交对未改变，无需仅因本次变更重建 database；旧 method-recall 和 QLCoder 评估结果失效，待重跑验证。
+
+## DS-2026-11-17-003 — CVE-2025-24789 内部类归属更正
+
+### 基本信息
+
+| 项目 | 内容 |
+|---|---|
+| 日期 | 2026-11-17 |
+| CVE | CVE-2025-24789 |
+| 项目 | `snowflakedb/snowflake-jdbc` |
+| 变更类型 | `ground-truth`, `cleanup` |
+| 状态 | `applied` |
+| 修改文件 | `data/fix_info.csv`, `data/rerun_cve.txt` |
+
+### 字段级变更与证据
+
+- `openBrowser` 的 `class`：`SessionUtilExternalBrowser` → `DefaultAuthExternalBrowserHandlers`；类范围改为 65–99，方法范围保持 72–93。
+- 删除未被补丁修改的 `build(URI)`。
+- GT 数量由 2 条改为 1 条，行号基准为 fixed commit `4f01bb8f9b708c71e7a2111c87371dbfc1d53dd6`。
+
+### 派生数据与未完成事项
+
+提交对未改变；旧方法级召回结果失效，待重跑验证。
+
+## DS-2026-11-17-004 — CVE-2025-26864 hunk 上下文误标更正
+
+### 基本信息
+
+| 项目 | 内容 |
+|---|---|
+| 日期 | 2026-11-17 |
+| CVE | CVE-2025-26864 |
+| 项目 | `apache/iotdb` |
+| 变更类型 | `ground-truth`, `cleanup` |
+| 状态 | `applied` |
+| 修改文件 | `data/fix_info.csv`, `data/rerun_cve.txt` |
+
+### 字段级变更与证据
+
+- GT 数量由 5 条改为 3 条，行号基准为 fixed commit `34fcaff6b72470d5ad369307dde7fae8897aea7e`。
+- 删除重复的 `IoTDBDataSourceFactory.setProperties` 记录。
+- 删除未修改的 hunk 上下文方法 `OpenIdAuthorizer.fetchMetadata` 和 `User.deserialize`。
+- 保留真实修改的 `setProperties`、`OpenIdAuthorizer.login`，并增加遗漏的 `User.toString`（195–212）。
+
+### 派生数据与未完成事项
+
+提交对未改变；旧方法级召回结果失效，待重跑验证。
 
 ---
 

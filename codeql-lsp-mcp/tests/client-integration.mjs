@@ -39,8 +39,11 @@ try {
 
   const formatted = await client.formatDocument(validUri, undefined, true);
   assert.equal(formatted.status, "ok");
-  assert.equal(formatted.editsApplied, 1);
-  assert.match(readFileSync(workingValid, "utf8"), /^from int i/);
+  assert.equal(formatted.editsApplied, 2);
+  const formattedContent = readFileSync(workingValid, "utf8");
+  assert.match(formattedContent, /^from int i/);
+  assert.match(formattedContent, /\/\/ formatted at EOF\n$/,
+    "formatting must accept an edit at the empty final line");
 
   const status = client.getStatus();
   assert.equal(status.status, "healthy");
