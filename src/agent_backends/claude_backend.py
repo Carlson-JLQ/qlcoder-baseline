@@ -33,6 +33,7 @@ MODELS = {
     # The [1M] selector asks for the 1M-token context window (200k without it).
     "deepseek-v4.1-flash-itkk": "deepseek-v4.1-flash-itkk[1M]",
     "deepseek-v4.1-flash-ark-eco": "deepseek-v4.1-flash-ark-eco[1M]",
+    "deepseek-v4.1-flash-ark": "deepseek-v4.1-flash-ark[1M]",
 }
 
 

@@ -1072,9 +1072,9 @@ async def main():
                         help="Max iterations (default: 10)")
     parser.add_argument("--cache-phase-output", action="store_true", default=True)
     parser.add_argument("--no-cache-phase-output", dest="cache_phase_output", action="store_false")
-    parser.add_argument("--model", default="deepseek-v4.1-flash-ark-eco",
+    parser.add_argument("--model", default="deepseek-v4.1-flash-ark",
                         choices=["sonnet-4", "sonnet-4.5", "deepseek-v4.1-flash-itkk",
-                                 "gemini-2.5-pro", "gemini-2.5-flash", "gpt-5","deepseek-v4.1-flash-ark-eco"])
+                                 "gemini-2.5-pro", "gemini-2.5-flash", "gpt-5","deepseek-v4.1-flash-ark-eco","deepseek-v4.1-flash-ark"])
     parser.add_argument("--agent", default="claude", choices=["claude", "gemini", "codex"],
                         help="Agent backend to use (default: claude)")
     parser.add_argument("--ablation-mode", default="full",
